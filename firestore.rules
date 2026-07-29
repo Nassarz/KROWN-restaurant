@@ -1,0 +1,62 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() { return request.auth != null; }
+    function isAdmin() { return isSignedIn() && request.auth.token.email == 'walusansa1nassarz@gmail.com'; }
+    
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    function isManager(restaurantId) {
+      return isSignedIn() && getUserData().role == 'manager' && getUserData().restaurantId == restaurantId;
+    }
+    
+    function isStaff(restaurantId) {
+      return isSignedIn() && getUserData().restaurantId == restaurantId;
+    }
+
+    match /restaurants/{restaurantId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
+    }
+
+    match /ingredients/{ingredientId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin() || isManager(request.resource.data.restaurantId);
+    }
+
+    match /products/{productId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin() || (isSignedIn() && getUserData().role == 'manager');
+    }
+
+    match /orders/{orderId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+      allow delete: if isAdmin();
+    }
+
+    match /audit_logs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if false;
+    }
+
+    match /accountingLedger/{id} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if false;
+    }
+  }
+}
