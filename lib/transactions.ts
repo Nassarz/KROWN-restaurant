@@ -1,82 +1,50 @@
-import { db } from './firebase';
-import { collection, doc, runTransaction, serverTimestamp, setDoc } from 'firebase/firestore';
+import { supabase } from './supabase';
 
 export async function placeOrderAtomic(orderData: any, items: any[]) {
-  // Uses a Firestore transaction to deduct inventory and create the order atomically
   try {
-    await runTransaction(db, async (transaction) => {
-      // 1. Read all needed ingredients
-      const ingredientRefs: Record<string, any> = {};
-      const inventoryReads = [];
-      
-      for (const item of items) {
-        if (item.recipe) {
-          for (const req of item.recipe) {
-            if (!ingredientRefs[req.ingredientId]) {
-              const ref = doc(db, 'ingredients', req.ingredientId);
-              ingredientRefs[req.ingredientId] = ref;
-              inventoryReads.push(transaction.get(ref));
-            }
+    // Deduct ingredient stock
+    for (const item of items) {
+      if (item.recipe) {
+        for (const req of item.recipe) {
+          const { data: ing } = await supabase
+            .from('ingredients')
+            .select('quantity')
+            .eq('id', req.ingredientId)
+            .single();
+
+          if (ing) {
+            const newQty = Math.max(0, (ing.quantity || 0) - req.quantity * item.quantity);
+            await supabase.from('ingredients').update({ quantity: newQty }).eq('id', req.ingredientId);
           }
         }
       }
+    }
 
-      const snapshots = await Promise.all(inventoryReads);
-      const inventoryState: Record<string, number> = {};
-      
-      snapshots.forEach(snap => {
-        if (snap.exists()) {
-          inventoryState[snap.id] = snap.data().stock;
-        }
-      });
+    // Write order to Supabase
+    const orderId = orderData.id || `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+    const { error } = await supabase.from('orders').upsert({
+      ...orderData,
+      id: orderId,
+      items,
+      status: 'pending',
+      created_at: Date.now(),
+    }, { onConflict: 'id' });
 
-      // 2. Validate stock
-      const stockUpdates: Record<string, number> = {};
-      for (const item of items) {
-        if (item.recipe) {
-          for (const req of item.recipe) {
-            const currentStock = inventoryState[req.ingredientId] || 0;
-            const deduction = req.quantity * item.quantity;
-            if (currentStock < deduction) {
-              throw new Error(`Insufficient stock for ingredient ${req.ingredientId}`);
-            }
-            stockUpdates[req.ingredientId] = currentStock - deduction;
-            inventoryState[req.ingredientId] = currentStock - deduction; // update for next item
-          }
-        }
-      }
+    if (error) throw error;
 
-      // 3. Write updates
-      // Update inventory
-      for (const [id, newStock] of Object.entries(stockUpdates)) {
-        transaction.update(ingredientRefs[id], { stock: newStock });
-      }
-
-      // Create order
-      const newOrderRef = doc(collection(db, 'orders'));
-      transaction.set(newOrderRef, {
-        ...orderData,
-        items,
-        status: 'pending',
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-      });
-      
-      // Post to accounting ledger (double entry)
-      const ledgerRef = doc(collection(db, 'accountingLedger'));
-      transaction.set(ledgerRef, {
-        orderId: newOrderRef.id,
-        restaurantId: orderData.restaurantId,
-        type: 'SALE',
-        debit: orderData.total,
-        credit: orderData.total, // Simplified: Debit Cash, Credit Revenue
-        timestamp: Date.now()
-      });
+    // Write to accounting ledger
+    await supabase.from('accounting_ledger').insert({
+      id: `ledger-${Date.now()}`,
+      order_id: orderId,
+      restaurant_id: orderData.restaurantId,
+      type: 'SALE',
+      amount: orderData.total,
+      created_at: Date.now()
     });
-    
-    return { success: true };
+
+    return { success: true, orderId };
   } catch (error) {
-    console.error('Transaction failed:', error);
+    console.warn('placeOrderAtomic failed:', error);
     throw error;
   }
 }

@@ -1,35 +1,41 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { db } from '@/lib/firebase';
-import { collection, addDoc, updateDoc, doc } from 'firebase/firestore';
 import { Search, Plus, Edit3, Image as ImageIcon, Loader2 } from 'lucide-react';
 import { vibrate } from '@/lib/utils';
-import { logAudit } from '@/lib/audit';
 import { User } from 'firebase/auth';
+import { formatUGX } from '@/lib/mockData';
+import { dataStore } from '@/lib/dataStore';
 
 export default function ManagerMenu({ products, user }: { products: any[], user: User }) {
   const [search, setSearch] = useState('');
   const [isEditing, setIsEditing] = useState<any | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [displayProducts, setDisplayProducts] = useState<any[]>(() => dataStore.getProducts());
+
+  useEffect(() => {
+    const unsub = dataStore.subscribe(() => {
+      setDisplayProducts(dataStore.getProducts());
+    });
+    return () => unsub();
+  }, []);
 
   const [formData, setFormData] = useState({
     name: '',
     price: '',
-    category: '',
-    image: '', // this might be URL or emoji
+    category: 'mains',
+    image: '',
   });
   const [uploading, setUploading] = useState(false);
 
-  const filteredProducts = products.filter(p => 
+  const filteredProducts = displayProducts.filter(p => 
     p.name.toLowerCase().includes(search.toLowerCase()) || 
     (p.category || '').toLowerCase().includes(search.toLowerCase())
   );
 
-  const toggleProductAvailability = async (id: string, current: boolean) => {
+  const toggleProductAvailability = (id: string) => {
     vibrate(40);
-    await updateDoc(doc(db, 'products', id), { available: !current });
-    logAudit(user.email || 'unknown', 'TOGGLE_PRODUCT_AVAILABILITY', { productId: id, available: !current });
+    dataStore.toggleProductAvailability(id);
   };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -56,36 +62,30 @@ export default function ManagerMenu({ products, user }: { products: any[], user:
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    try {
-      if (isEditing) {
-        await updateDoc(doc(db, 'products', isEditing.id), {
-          name: formData.name,
-          price: parseFloat(formData.price),
-          category: formData.category,
-          image: formData.image,
-        });
-        logAudit(user.email || 'unknown', 'EDIT_PRODUCT', { productId: isEditing.id, name: formData.name });
-      } else {
-        const res = await addDoc(collection(db, 'products'), {
-          name: formData.name,
-          price: parseFloat(formData.price),
-          category: formData.category,
-          image: formData.image,
-          available: true
-        });
-        logAudit(user.email || 'unknown', 'ADD_PRODUCT', { productId: res.id, name: formData.name });
-      }
-      setIsEditing(null);
-      setIsAdding(false);
-      setFormData({ name: '', price: '', category: '', image: '' });
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
+    if (!formData.name || !formData.price) return;
+
+    if (isEditing) {
+      dataStore.updateProduct(isEditing.id, {
+        name: formData.name,
+        price: parseFloat(formData.price),
+        category: formData.category as any,
+        image: formData.image,
+      });
+    } else {
+      dataStore.addProduct({
+        name: formData.name,
+        price: parseFloat(formData.price),
+        category: formData.category as any,
+        image: formData.image || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80',
+      });
     }
+
+    setIsEditing(null);
+    setIsAdding(false);
+    setFormData({ name: '', price: '', category: 'mains', image: '' });
+    vibrate([30, 50]);
   };
 
   const openEdit = (product: any) => {
@@ -135,7 +135,9 @@ export default function ManagerMenu({ products, user }: { products: any[], user:
                 </div>
                 <div>
                   <h4 className="font-bold text-slate-900 dark:text-white">{product.name}</h4>
-                  <p className="text-sm font-medium text-slate-500">${product.price.toFixed(2)}</p>
+                  <p className="text-sm font-semibold text-orange-500">
+                    {formatUGX(product.price)} <span className="text-[10px] text-slate-400 font-medium">(VAT Inclusive)</span>
+                  </p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -146,7 +148,7 @@ export default function ManagerMenu({ products, user }: { products: any[], user:
                   <Edit3 className="w-4 h-4" />
                 </button>
                 <button
-                  onClick={() => toggleProductAvailability(product.id, product.available !== false)}
+                  onClick={() => toggleProductAvailability(product.id)}
                   className={`w-14 h-8 rounded-full transition-colors flex items-center px-1 ${product.available !== false ? 'bg-green-500' : 'bg-slate-300 dark:bg-slate-700'}`}
                 >
                   <motion.div 
@@ -178,8 +180,8 @@ export default function ManagerMenu({ products, user }: { products: any[], user:
                   <input required value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full border dark:border-white/10 rounded-xl p-3 bg-slate-50 dark:bg-black/20 dark:text-white" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1 dark:text-slate-300">Price</label>
-                  <input required type="number" step="0.01" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} className="w-full border dark:border-white/10 rounded-xl p-3 bg-slate-50 dark:bg-black/20 dark:text-white" />
+                  <label className="block text-sm font-medium mb-1 dark:text-slate-300">Price UGX (18% URA VAT Inclusive) *</label>
+                  <input required type="number" step="0.01" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} className="w-full border dark:border-white/10 rounded-xl p-3 bg-slate-50 dark:bg-black/20 dark:text-white font-bold" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1 dark:text-slate-300">Category</label>

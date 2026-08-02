@@ -1,0 +1,18 @@
+{
+  "name": "KROWN ERP - Multi-Branch Restaurant POS",
+  "short_name": "KROWN ERP",
+  "description": "Enterprise Multi-Branch Restaurant POS, Kitchen Display & Financial Management System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0A0A0C",
+  "theme_color": "#f97316",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

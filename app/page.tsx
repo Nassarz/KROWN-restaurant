@@ -1,35 +1,322 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { auth } from '@/lib/firebase';
-import { signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, User } from 'firebase/auth';
 import POSPage from '@/components/pos';
 import AdminPage from '@/components/admin';
 import ManagerPage from '@/components/manager';
 import KitchenPage from '@/components/kitchen';
-import { UtensilsCrossed } from 'lucide-react';
+import CashierDashboard from '@/components/cashier';
+import DashboardAuth from '@/components/dashboard-auth';
+import { UtensilsCrossed, Lock, Mail, ShieldAlert } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { supabase } from '@/lib/supabase';
+import type { StaffMember } from '@/lib/mockData';
+import { dataStore } from '@/lib/dataStore';
 
 export default function AppRouter() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'pos' | 'admin' | 'manager' | 'kitchen'>('pos');
+  const [view, setView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier'>('pos');
+  const [activeStaff, setActiveStaff] = useState<StaffMember | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
+  const [pendingView, setPendingView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | null>(null);
+
+  // Auth Form State
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+
+  // Presence Tracking for Branch Online / Offline Status
+  useEffect(() => {
+    if (!activeStaff) {
+      dataStore.setOnlineStaffPresence([]);
+      return;
+    }
+
+    const presenceChannel = supabase.channel('krown-presence-room', {
+      config: { presence: { key: activeStaff.id } }
+    });
+
+    presenceChannel
+      .on('presence', { event: 'sync' }, () => {
+        const state = presenceChannel.presenceState();
+        const onlineUsers: any[] = [];
+        Object.values(state).forEach((presences: any) => {
+          presences.forEach((p: any) => {
+            if (p.staffId) onlineUsers.push(p);
+          });
+        });
+        dataStore.setOnlineStaffPresence(onlineUsers);
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await presenceChannel.track({
+            staffId: activeStaff.id,
+            email: activeStaff.email,
+            branch: activeStaff.branch,
+            assignedBranchId: activeStaff.assignedBranchId,
+            role: activeStaff.role,
+            onlineAt: Date.now()
+          });
+        }
+      });
+
+    return () => {
+      presenceChannel.unsubscribe();
+    };
+  }, [activeStaff]);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setLoading(false);
+    const restoreStaffSession = async (authUser: any) => {
+      if (!authUser) { setLoading(false); return; }
+      try {
+        // Try UID first, then email
+        let dbStaff: any = null;
+        const { data: byId } = await supabase.from('staff').select('*').eq('id', authUser.id).maybeSingle();
+        if (byId) {
+          dbStaff = byId;
+        } else {
+          const { data: byEmail } = await supabase.from('staff').select('*').eq('email', authUser.email?.toLowerCase()).maybeSingle();
+          dbStaff = byEmail;
+        }
+
+        if (dbStaff) {
+          const staff: StaffMember = {
+            id: dbStaff.id,
+            name: dbStaff.name || authUser.email?.split('@')[0],
+            email: dbStaff.email || authUser.email,
+            role: dbStaff.role || 'Senior Waiter',
+            branch: dbStaff.branch || 'Global HQ',
+            assignedBranchId: dbStaff.assigned_branch_id || null,
+            status: dbStaff.status || 'active',
+            avatar: dbStaff.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(dbStaff.name || 'Staff')}&background=f97316&color=fff&bold=true&size=200`,
+            pin: dbStaff.pin || '0000',
+          };
+          setUser({ uid: staff.id, displayName: staff.name, email: staff.email, photoURL: staff.avatar });
+          setActiveStaff(staff);
+          // Auto-route on session restore
+          if (staff.role === 'Super Admin') setView('admin');
+          else if (staff.role === 'Branch Manager') setView('manager');
+          else if (staff.role === 'Head Chef' || staff.role === 'Kitchen Staff') setView('kitchen');
+          else if (staff.role === 'Cashier') setView('cashier');
+          else setView('pos');
+        }
+      } catch (err) {
+        console.warn('[Supabase Session] Restore error:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    // Check existing session on mount
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      restoreStaffSession(session?.user ?? null);
     });
-    return () => unsubscribe();
+
+    // Listen for auth changes (login/logout from other tabs)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setActiveStaff(null);
+        setView('pos');
+        setLoading(false);
+      }
+      // Don't re-run on SIGNED_IN — login handler already handles it
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  const handleLogin = async () => {
-    try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error('Login failed', error);
+
+
+  const handleNavigateWithAuth = (targetView: 'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier') => {
+    const role = activeStaff?.role;
+
+    // Super Admin has unrestricted access to all dashboards
+    if (role === 'Super Admin') {
+      setView(targetView);
+      return;
     }
+
+    // Role-Level Access Validation Policy (RLS Guard)
+    if (role === 'Senior Waiter' && targetView !== 'pos') {
+      alert('Access Denied (RLS Security Guard): POS Waiter accounts are strictly restricted to POS view.');
+      return;
+    }
+
+    if ((role === 'Head Chef' || role === 'Kitchen Staff') && targetView !== 'kitchen') {
+      alert('Access Denied (RLS Security Guard): Kitchen staff accounts are strictly restricted to Kitchen Display.');
+      return;
+    }
+
+    if (role === 'Cashier' && (targetView === 'admin' || targetView === 'manager')) {
+      alert('Access Denied (RLS Security Guard): Cashier accounts cannot access Manager or Admin dashboards.');
+      return;
+    }
+
+    if (role === 'Branch Manager' && targetView === 'admin') {
+      alert('Access Denied (RLS Security Guard): Branch Managers cannot access Super Admin Global HQ Settings.');
+      return;
+    }
+
+    setPendingView(targetView);
+    setShowAuthModal(true);
+  };
+
+  const handleStaffLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password) {
+      setLoginError('Please enter both email and password.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setLoginError(null);
+
+    const cleanEmail = email.trim().toLowerCase();
+    let foundStaff: StaffMember | undefined;
+
+    // Step 1: Authenticate via Supabase Auth (the single source of truth)
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email: cleanEmail,
+      password: password,
+    });
+
+    if (authError) {
+      // Supabase Auth rejected the credentials — surface the correct error
+      if (authError.message.toLowerCase().includes('invalid login credentials') ||
+          authError.message.toLowerCase().includes('invalid_credentials') ||
+          authError.message.toLowerCase().includes('invalid email or password')) {
+        setLoginError('Wrong email or password. Please try again.');
+      } else if (authError.message.toLowerCase().includes('email not confirmed')) {
+        setLoginError('Please confirm your email address before logging in.');
+      } else if (authError.message.toLowerCase().includes('too many requests')) {
+        setLoginError('Too many login attempts. Please wait a few minutes.');
+      } else {
+        setLoginError(`Login error: ${authError.message}`);
+      }
+      setIsSubmitting(false);
+      return;
+    }
+
+    if (authData?.user) {
+      const authUid = authData.user.id;
+      const authEmail = authData.user.email?.toLowerCase() || cleanEmail;
+
+      // Step 2: Fetch staff profile — first by UID (most reliable), then by email
+      let dbStaff: any = null;
+
+      // Try by UID (staff.id = auth user UID)
+      const { data: byId } = await supabase
+        .from('staff')
+        .select('*')
+        .eq('id', authUid)
+        .maybeSingle();
+      
+      if (byId) {
+        dbStaff = byId;
+      } else {
+        // Fallback: query by email
+        const { data: byEmail } = await supabase
+          .from('staff')
+          .select('*')
+          .eq('email', authEmail)
+          .maybeSingle();
+        dbStaff = byEmail;
+      }
+
+      if (dbStaff) {
+        foundStaff = {
+          id: dbStaff.id,
+          name: dbStaff.name || authEmail.split('@')[0],
+          email: dbStaff.email || authEmail,
+          role: dbStaff.role || 'Senior Waiter',
+          branch: dbStaff.branch || 'Global HQ',
+          assignedBranchId: dbStaff.assigned_branch_id || null,
+          status: dbStaff.status || 'active',
+          avatar: dbStaff.avatar ||
+            `https://ui-avatars.com/api/?name=${encodeURIComponent(dbStaff.name || 'Staff')}&background=f97316&color=fff&bold=true&size=200`,
+          pin: dbStaff.pin || '0000',
+        };
+      } else {
+        // No staff record exists yet — auto-create a profile from the auth user's metadata
+        const displayName = authData.user.user_metadata?.name ||
+          authData.user.user_metadata?.full_name ||
+          authEmail.split('@')[0];
+
+        const assignedRole = authData.user.user_metadata?.role ||
+          (authEmail.includes('admin') ? 'Super Admin' : 'Senior Waiter');
+
+        const assignedBranch = authData.user.user_metadata?.branch ||
+          (assignedRole === 'Super Admin' ? 'Global HQ' : 'FAZE 3');
+
+        const assignedBranchId = authData.user.user_metadata?.assignedBranchId || null;
+
+        foundStaff = {
+          id: authUid,
+          name: displayName,
+          email: authEmail,
+          role: assignedRole,
+          branch: assignedBranch,
+          assignedBranchId: assignedBranchId,
+          status: 'active',
+          avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=f97316&color=fff&bold=true&size=200`,
+          pin: authData.user.user_metadata?.pin || '1234',
+        };
+
+        // Persist the auto-created profile to the staff table
+        await supabase.from('staff').upsert({
+          id: authUid,
+          name: displayName,
+          email: authEmail,
+          role: assignedRole,
+          branch: assignedBranch,
+          status: 'active',
+          assigned_branch_id: assignedBranchId,
+          avatar: foundStaff.avatar,
+          created_at: Date.now(),
+        }, { onConflict: 'id' });
+      }
+    }
+
+    // Step 3: Validate found staff profile
+    if (foundStaff) {
+      if (foundStaff.status === 'banned') {
+        setLoginError('Access Denied: This staff account is BANNED by Admin.');
+        await supabase.auth.signOut();
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (foundStaff.status === 'paused') {
+        setLoginError('Account On Hold: Your shift account is currently paused.');
+        await supabase.auth.signOut();
+        setIsSubmitting(false);
+        return;
+      }
+
+      setUser({
+        uid: foundStaff.id,
+        displayName: foundStaff.name,
+        email: foundStaff.email,
+        photoURL: foundStaff.avatar,
+      });
+      setActiveStaff(foundStaff);
+
+      // Auto-route to the correct dashboard by role
+      if (foundStaff.role === 'Super Admin') setView('admin');
+      else if (foundStaff.role === 'Branch Manager') setView('manager');
+      else if (foundStaff.role === 'Head Chef' || foundStaff.role === 'Kitchen Staff') setView('kitchen');
+      else if (foundStaff.role === 'Cashier') setView('cashier');
+      else setView('pos');
+
+      setIsSubmitting(false);
+      return;
+    }
+
+    setLoginError('Login failed. Your account may not have been set up in the system yet. Contact your admin.');
+    setIsSubmitting(false);
   };
 
   if (loading) {
@@ -45,45 +332,140 @@ export default function AppRouter() {
   if (!user) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-[#F4F4F6] dark:bg-[#0A0A0C] text-slate-900 dark:text-slate-100 p-4">
-        <div className="w-20 h-20 bg-gradient-to-br from-orange-500 to-amber-500 rounded-3xl flex items-center justify-center shadow-xl shadow-orange-500/30 mb-8">
-          <UtensilsCrossed className="text-white w-10 h-10" />
+        <div className="w-full max-w-md bg-white/80 dark:bg-[#121214]/80 backdrop-blur-2xl p-8 rounded-[2.5rem] shadow-2xl border border-black/5 dark:border-white/10 ring-1 ring-black/5 dark:ring-white/10">
+          <div className="flex flex-col items-center mb-6">
+            <div className="w-20 h-20 rounded-3xl flex items-center justify-center shadow-xl shadow-orange-500/30 mb-4 p-1 overflow-hidden ring-4 ring-orange-500/20 bg-gradient-to-br from-orange-500 to-amber-500">
+              <img
+                src="/icon.svg"
+                alt="KROWN ERP Logo"
+                className="w-full h-full object-contain rounded-2xl"
+              />
+            </div>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white text-center">KROWN ERP</h1>
+            <p className="text-slate-500 dark:text-slate-400 text-xs mt-1 text-center font-medium">
+              Multi-Branch Enterprise POS & Management System
+            </p>
+          </div>
+
+          <form onSubmit={handleStaffLogin} className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-2">
+                Staff Email Address
+              </label>
+              <div className="relative">
+                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="admin@krown.ug"
+                  className="w-full bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/10 rounded-2xl py-3.5 pl-12 pr-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/50 transition-all text-sm font-medium"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-2">
+                Password
+              </label>
+              <div className="relative">
+                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                <input
+                  type="password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/10 rounded-2xl py-3.5 pl-12 pr-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/50 transition-all text-sm font-medium"
+                />
+              </div>
+            </div>
+
+            {loginError && (
+              <div className="p-3.5 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-center gap-2 text-red-500 text-xs font-semibold">
+                <ShieldAlert className="w-4 h-4 shrink-0" />
+                <span>{loginError}</span>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white py-4 rounded-2xl font-bold shadow-lg shadow-orange-500/30 transition-all active:scale-[0.98] text-center flex items-center justify-center gap-2"
+            >
+              {isSubmitting ? (
+                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                'Log In to Staff Dashboard'
+              )}
+            </button>
+          </form>
+
+          {/* PWA App Install Banner */}
+          <div className="mt-4">
+            <button
+              onClick={() => {
+                alert('📱 To install KROWN ERP as an App:\n\n1. On Chrome/Android: Tap menu (⋮) -> "Install App" or "Add to Home Screen".\n2. On Safari/iOS: Tap Share icon -> "Add to Home Screen".');
+              }}
+              className="w-full bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-slate-700 dark:text-slate-300 py-3 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 transition-all border border-black/5 dark:border-white/10"
+            >
+              📱 Install KROWN ERP Desktop/Mobile App (Offline Enabled)
+            </button>
+          </div>
         </div>
-        <h1 className="text-4xl font-bold tracking-tight mb-2 text-center">Lumière POS</h1>
-        <p className="text-slate-500 dark:text-slate-400 mb-8 text-center max-w-sm">
-          Premium Enterprise Restaurant Management System. Sign in to access your dashboard.
-        </p>
-        <button
-          onClick={handleLogin}
-          className="bg-white dark:bg-[#1A1A1E] text-slate-900 dark:text-white px-8 py-4 rounded-2xl font-semibold shadow-lg hover:shadow-xl transition-all active:scale-[0.98] border border-black/5 dark:border-white/10"
-        >
-          Sign In with Google
-        </button>
       </div>
     );
   }
 
   return (
-    <AnimatePresence mode="wait">
-      {view === 'pos' && (
-        <motion.div key="pos" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -15 }} transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }} className="h-screen w-full absolute top-0 left-0 bg-[#F4F4F6] dark:bg-[#0A0A0C]">
-          <POSPage user={user} setView={setView} />
-        </motion.div>
-      )}
-      {view === 'admin' && (
-        <motion.div key="admin" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -15 }} transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }} className="min-h-screen w-full absolute top-0 left-0 bg-[#F4F4F6] dark:bg-[#0A0A0C]">
-          <AdminPage user={user} setView={setView} />
-        </motion.div>
-      )}
-      {view === 'manager' && (
-        <motion.div key="manager" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -15 }} transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }} className="min-h-screen w-full absolute top-0 left-0 bg-[#F4F4F6] dark:bg-[#0A0A0C]">
-          <ManagerPage user={user} setView={setView} />
-        </motion.div>
-      )}
-      {view === 'kitchen' && (
-        <motion.div key="kitchen" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -15 }} transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }} className="min-h-screen w-full absolute top-0 left-0 bg-[#F4F4F6] dark:bg-[#0A0A0C]">
-          <KitchenPage setView={setView} />
-        </motion.div>
-      )}
-    </AnimatePresence>
+    <>
+      <AnimatePresence mode="wait">
+        {view === 'pos' && (
+          <motion.div key="pos" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -15 }} transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }} className="h-screen w-full absolute top-0 left-0 bg-[#F4F4F6] dark:bg-[#0A0A0C]">
+            <POSPage user={user} setView={handleNavigateWithAuth} activeStaff={activeStaff} />
+          </motion.div>
+        )}
+        {view === 'cashier' && (
+          <motion.div key="cashier" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -15 }} transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }} className="min-h-screen w-full absolute top-0 left-0 bg-[#F4F4F6] dark:bg-[#0A0A0C]">
+            <CashierDashboard setView={handleNavigateWithAuth} activeStaff={activeStaff} />
+          </motion.div>
+        )}
+        {view === 'admin' && (
+          <motion.div key="admin" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -15 }} transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }} className="min-h-screen w-full absolute top-0 left-0 bg-[#F4F4F6] dark:bg-[#0A0A0C]">
+            <AdminPage user={user} setView={handleNavigateWithAuth} />
+          </motion.div>
+        )}
+        {view === 'manager' && (
+          <motion.div key="manager" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -15 }} transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }} className="min-h-screen w-full absolute top-0 left-0 bg-[#F4F4F6] dark:bg-[#0A0A0C]">
+            <ManagerPage user={user} setView={handleNavigateWithAuth} />
+          </motion.div>
+        )}
+        {view === 'kitchen' && (
+          <motion.div key="kitchen" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -15 }} transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }} className="min-h-screen w-full absolute top-0 left-0 bg-[#F4F4F6] dark:bg-[#0A0A0C]">
+            <KitchenPage setView={handleNavigateWithAuth} activeStaff={activeStaff} />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Role Auth Screen Modal on Navigation */}
+      <AnimatePresence>
+        {showAuthModal && pendingView && (
+          <DashboardAuth
+            targetTitle={pendingView.toUpperCase()}
+            onAuthenticated={(staff) => {
+              setActiveStaff(staff);
+              setView(pendingView);
+              setShowAuthModal(false);
+              setPendingView(null);
+            }}
+            onCancel={() => {
+              setShowAuthModal(false);
+              setPendingView(null);
+            }}
+          />
+        )}
+      </AnimatePresence>
+    </>
   );
 }

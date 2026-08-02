@@ -2,8 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { db } from '@/lib/firebase';
-import { collection, query, onSnapshot, orderBy, doc, updateDoc, where } from 'firebase/firestore';
+
 import { User } from 'firebase/auth';
 import { 
   ChevronLeft, Users, Store, Activity, Settings, 
@@ -16,16 +15,17 @@ import ManagerOrders from './manager-orders';
 import ManagerInventory from './manager-inventory';
 import ManagerReceipts from './manager-receipts';
 import ManagerStaff from './manager-staff';
+import AdminCompanies from './admin-companies';
+import AdminZones from './admin-zones';
+import { dataStore } from '@/lib/dataStore';
 
 export default function ManagerPage({ user, setView }: { user: User, setView: (v: 'pos' | 'admin' | 'manager' | 'kitchen') => void }) {
-  const [activeTab, setActiveTab] = useState<'orders' | 'menu' | 'inventory' | 'staff' | 'receipts'>('orders');
+  const [activeTab, setActiveTab] = useState<'orders' | 'menu' | 'inventory' | 'staff' | 'receipts' | 'companies' | 'zones'>('orders');
   const [isDark, setIsDark] = useState(false);
   const [orders, setOrders] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [ingredients, setIngredients] = useState<any[]>([]);
 
-  // Assume user's restaurantId is somehow known, we'll mock it for now since custom claims aren't fully read from client easily without fetch.
-  // In a real app, `user.restaurantId` would come from the user's Firestore document.
   const restaurantId = 'default-restaurant';
 
   useEffect(() => {
@@ -49,23 +49,20 @@ export default function ManagerPage({ user, setView }: { user: User, setView: (v
   };
 
   useEffect(() => {
-    const unsubOrders = onSnapshot(query(collection(db, 'orders'), orderBy('createdAt', 'desc')), snap => {
-      setOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
-    const unsubProds = onSnapshot(collection(db, 'products'), snap => {
-      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
-    const unsubIngs = onSnapshot(collection(db, 'ingredients'), snap => {
-      setIngredients(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
+    const syncData = () => {
+      setOrders(dataStore.getOrders());
+      setProducts(dataStore.getProducts());
+      setIngredients(dataStore.getIngredients());
+    };
 
-    return () => { unsubOrders(); unsubProds(); unsubIngs(); };
+    syncData();
+    const unsub = dataStore.subscribe(syncData);
+    return () => unsub();
   }, [restaurantId]);
 
-  const toggleProductAvailability = async (id: string, current: boolean) => {
+  const toggleProductAvailability = (id: string, current: boolean) => {
     vibrate(40);
-    await updateDoc(doc(db, 'products', id), { available: !current });
-    logAudit(user.email || 'unknown', 'TOGGLE_PRODUCT', { productId: id, available: !current });
+    dataStore.toggleProductAvailability(id);
   };
 
   return (
@@ -82,13 +79,15 @@ export default function ManagerPage({ user, setView }: { user: User, setView: (v
           </div>
         </div>
 
-        <nav className="flex flex-col gap-1 flex-1">
+        <nav className="flex flex-col gap-1 flex-1 overflow-y-auto custom-scrollbar">
           {[
             { id: 'orders', icon: Activity, label: 'Live Orders' },
+            { id: 'companies', icon: Settings, label: 'Corporate Accounts' },
+            { id: 'zones', icon: Box, label: 'Seating Places' },
             { id: 'menu', icon: UtensilsCrossed, label: 'Menu Mgmt' },
             { id: 'inventory', icon: Box, label: 'Inventory' },
             { id: 'staff', icon: Users, label: 'Staff' },
-            { id: 'receipts', icon: Settings, label: 'Receipts' },
+            { id: 'receipts', icon: Settings, label: 'Receipts & Cashier' },
           ].map(tab => (
             <button
               key={tab.id}
@@ -129,6 +128,18 @@ export default function ManagerPage({ user, setView }: { user: User, setView: (v
           {activeTab === 'orders' && (
             <motion.div key="orders" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="h-full">
               <ManagerOrders orders={orders} />
+            </motion.div>
+          )}
+
+          {activeTab === 'companies' && (
+            <motion.div key="companies" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="h-full">
+              <AdminCompanies />
+            </motion.div>
+          )}
+
+          {activeTab === 'zones' && (
+            <motion.div key="zones" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="h-full">
+              <AdminZones />
             </motion.div>
           )}
 

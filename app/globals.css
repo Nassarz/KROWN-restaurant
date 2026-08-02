@@ -24,4 +24,19 @@
   .mask-image-r {
     mask-image: linear-gradient(to right, black 80%, transparent 100%);
   }
+
+  .animate-slide-down {
+    animation: slideDown 0.25s ease-out both;
+  }
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
