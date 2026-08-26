@@ -243,12 +243,9 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
         tinNumber: tinNumber.trim() || undefined,
       });
       
-      // KITCHEN ISOLATION RULE: Automatically print ONLY Kitchen Order Ticket (KOT).
-      // NO customer receipt is printed on the POS/waiter side — receipts are printed
-      // only print KOT for Takeaway/Delivery from POS. Dine In prints nothing from POS.
-      if (placed.type !== 'Dine In') {
-        autoPrintKitchenTicket(placed);
-      }
+      // KITCHEN ISOLATION RULE: Always send Kitchen Order Ticket (KOT) to kitchen printer.
+      // This fires for ALL order types — Dine In, Takeaway, Delivery.
+      autoPrintKitchenTicket(placed);
 
       vibrate([50, 100, 50]);
       setOrderConfirmation(placed);
