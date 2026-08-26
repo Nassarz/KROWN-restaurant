@@ -33,6 +33,9 @@ const HTTP_PORT = parseInt(args.port || '9101', 10);
 // In-memory print job queue for HTTP client requests
 const jobs = [];
 
+// In-memory set of job IDs currently being processed to prevent duplicates
+const processingLock = new Set();
+
 // ── ENV LOADER (Zero-dependency .env.local parser) ───────────────────────────
 function loadEnv() {
   const envPath = path.resolve(process.cwd(), '.env.local');
@@ -376,9 +379,15 @@ async function pollDatabaseQueue() {
 }
 
 async function processDatabaseJob(job) {
+  // Deduplication: skip if already being processed by HTTP handler or another poll cycle
+  if (processingLock.has(job.id)) {
+    console.log(`[PRINT_AGENT] Job ${job.id} already in progress, skipping duplicate.`);
+    return;
+  }
+  processingLock.add(job.id);
   const attempts = (job.attempts || 0) + 1;
   
-  // Set printing state to prevent overlapping runs
+  // Set printing state in Supabase to lock against other daemon instances
   const { error: lockError } = await supabase
     .from('print_jobs')
     .update({ status: 'PRINTING', attempts })
@@ -423,14 +432,12 @@ async function processDatabaseJob(job) {
   } catch (err) {
     console.error(`[PRINT_AGENT] ✗ Job ${job.id} failed:`, err.message);
     
-    // Failed Status
     await supabase
       .from('print_jobs')
-      .update({
-        status: 'FAILED', // maps to failed
-        last_error: err.message
-      })
+      .update({ status: 'FAILED', last_error: err.message })
       .eq('id', job.id);
+  } finally {
+    processingLock.delete(job.id);
   }
 }
 
@@ -461,9 +468,20 @@ function startDatabaseQueueListener() {
 
 // ── HTTP CLIENT SERVER REQUEST HANDLER ───────────────────────────────────────
 async function processHttpClientJob(job) {
+  // Deduplication: if Supabase realtime also fires, skip it
+  if (processingLock.has(job.id)) {
+    console.log(`[PRINT_AGENT] HTTP job ${job.id} already being processed via DB queue, skipping.`);
+    return;
+  }
+  processingLock.add(job.id);
   job.status = 'PRINTING';
   job.attempts += 1;
   console.log(`[PRINT_AGENT] Processing HTTP client job ${job.id} (Attempt ${job.attempts})`);
+
+  // Immediately mark as PRINTING in Supabase so DB queue poller skips it
+  if (supabase) {
+    supabase.from('print_jobs').update({ status: 'PRINTING' }).eq('id', job.id).then(() => {}).catch(() => {});
+  }
   
   const isUsb = IS_RECEIPT_USB && (job.type === 'CUSTOMER_RECEIPT' || job.type === 'BILL' || job.destination.toLowerCase().includes('receipt'));
   
@@ -478,10 +496,20 @@ async function processHttpClientJob(job) {
     job.printedAt = Date.now();
     job.lastError = null;
     console.log(`[PRINT_AGENT] HTTP client job ${job.id} printed successfully.`);
+    // Update Supabase to PRINTED so UI reflects success
+    if (supabase) {
+      supabase.from('print_jobs').update({ status: 'PRINTED', printed_at: Date.now() }).eq('id', job.id).then(() => {}).catch(() => {});
+    }
   } catch (err) {
     job.status = 'FAILED';
     job.lastError = err.message;
     console.error(`[PRINT_AGENT] HTTP client job ${job.id} failed: ${err.message}`);
+    // Leave as QUEUED so DB queue poller retries via Supabase
+    if (supabase) {
+      supabase.from('print_jobs').update({ status: 'QUEUED', last_error: err.message }).eq('id', job.id).then(() => {}).catch(() => {});
+    }
+  } finally {
+    processingLock.delete(job.id);
   }
 }
 

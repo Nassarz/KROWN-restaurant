@@ -213,7 +213,7 @@ export function generateFormattedThermalReceipt(
     text += doubleDivider + '\n';
     text += centerText('*** PAID - THANK YOU ***') + '\n';
   }
-  text += centerText('Powered by INTCORE POS') + '\n\n\n';
+  text += centerText('Powered by KROWN ERP') + '\n\n\n';
 
   return text;
 }
