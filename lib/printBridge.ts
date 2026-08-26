@@ -82,45 +82,13 @@ export async function sendToNetworkPrinter(
     return false;
   }
 
-  const targetIp = kind === 'kitchen' ? cfg.kitchenIp : (cfg.receiptIp || cfg.kitchenIp);
-  const targetPort = Number(kind === 'kitchen' ? cfg.kitchenPort : (cfg.receiptPort || cfg.kitchenPort || 9100));
-
-  try {
-    // Attempt local HTTP bridge fast-path (silently caught if unreachable)
-    const res = await fetch(`http://${cfg.bridgeHost}:${cfg.bridgePort}/print`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: jobId,
-        orderId,
-        type,
-        text,
-        ip: targetIp,
-        port: targetPort
-      }),
-    });
-    
-    if (res.ok) {
-      const body = await res.json().catch(() => null);
-      if (body?.ok === true) {
-        if (body.status === 'PRINTED') {
-          dataStore.updatePrintJobStatus(jobId, 'PRINTED', { printedAt: Date.now(), attempts: 1 });
-        } else {
-          dataStore.updatePrintJobStatus(jobId, 'PRINTING', { attempts: 1 });
-          setTimeout(() => pollJobStatus(jobId), 1000);
-        }
-        return true;
-      }
-    }
-    // If local bridge responded but rejected or failed, rely on database queue sync.
-    console.log('[PrintBridge] Local bridge request not completed. Relying on Supabase sync queue.');
-    return true; // Return true so client treats it as queued/pending instead of crashing
-  } catch (e: any) {
-    // If local bridge is unreachable (e.g. Mixed Content or offline), do NOT update status to FAILED in DB!
-    // Leave status as QUEUED in Supabase so the background print bridge daemon on Cashier PC prints it!
-    console.log('[PrintBridge] Local HTTP bridge not reachable. Relying on Supabase queue sync.');
-    return true; // Return true to indicate job is successfully enqueued in database
-  }
+  // ── SINGLE-PATH DESIGN ──
+  // The job is already inserted in Supabase as QUEUED by printer.ts -> dataStore.addPrintJob.
+  // The daemon running on the Cashier PC watches the QUEUED table via Supabase Realtime.
+  // We do NOT try the HTTP bridge fast-path here to avoid duplicate prints.
+  // The daemon handles routing: USB for receipt, TCP for kitchen.
+  console.log(`[PrintBridge] Job ${jobId} enqueued in Supabase. Daemon will print.`);
+  return true;
 }
 
 export async function retryNetworkPrintJob(jobId: string): Promise<boolean> {
