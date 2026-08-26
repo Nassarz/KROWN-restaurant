@@ -71,6 +71,9 @@ const KITCHEN_PRINTER_PORT = parseInt(args['kitchen-port'] || env.KITCHEN_PRINTE
 const RECEIPT_PRINTER_IP = args['receipt-ip'] || env.RECEIPT_PRINTER_IP || '192.168.1.101';
 const RECEIPT_PRINTER_PORT = parseInt(args['receipt-port'] || env.RECEIPT_PRINTER_PORT || '9100', 10);
 
+const IS_RECEIPT_USB = args['receipt-usb'] === true || env.RECEIPT_USB === 'true';
+const USB_PRINTER_PATH = args['usb-path'] || env.USB_PRINTER_PATH || '/dev/usb/lp0';
+
 // ── SUPABASE CLIENT INITIALIZATION ──────────────────────────────────────────
 let supabase = null;
 
@@ -274,8 +277,23 @@ function compileEscpos(payload, paperWidth = '80mm') {
   return Buffer.concat(chunks);
 }
 
-// ── LOW-LEVEL TCP SOCKET WRITER ──────────────────────────────────────────────
-function writeToPrinter(ip, port, escposBuffer) {
+// ── LOW-LEVEL PRINTER WRITER (TCP OR USB) ────────────────────────────────────
+function writeToPrinter(ip, port, escposBuffer, isUsb = false) {
+  if (isUsb) {
+    return new Promise((resolve, reject) => {
+      console.log(`[PRINT_AGENT] USB_WRITE_INITIATED to ${USB_PRINTER_PATH}`);
+      fs.writeFile(USB_PRINTER_PATH, escposBuffer, (err) => {
+        if (err) {
+          console.error(`[PRINT_AGENT] USB write error:`, err.message);
+          reject(new Error(`USB write error: ${err.message}`));
+        } else {
+          console.log(`[PRINT_AGENT] USB write successful. Sent ${escposBuffer.length} bytes.`);
+          resolve(true);
+        }
+      });
+    });
+  }
+
   return new Promise((resolve, reject) => {
     console.log(`[PRINT_AGENT] TCP_CONNECTION_INITIATED to ${ip}:${port}`);
     const socket = net.createConnection({ host: ip, port }, () => {
@@ -369,18 +387,23 @@ async function processDatabaseJob(job) {
 
   console.log(`[PRINT_AGENT] Processing job ${job.id} from database. attempts: ${attempts}`);
 
-  // Resolve target static IP & Port
+  // Resolve target static IP & Port, or USB connection
+  let isUsb = false;
   let ip = KITCHEN_PRINTER_IP;
   let port = KITCHEN_PRINTER_PORT;
 
   if (job.printer_id === 'receipt' || job.destination.toLowerCase().includes('receipt')) {
-    ip = RECEIPT_PRINTER_IP;
-    port = RECEIPT_PRINTER_PORT;
+    if (IS_RECEIPT_USB) {
+      isUsb = true;
+    } else {
+      ip = RECEIPT_PRINTER_IP;
+      port = RECEIPT_PRINTER_PORT;
+    }
   }
 
   try {
     const escposBuffer = compileEscpos(job.payload);
-    await writeToPrinter(ip, port, escposBuffer);
+    await writeToPrinter(ip, port, escposBuffer, isUsb);
 
     // Success Status
     await supabase
@@ -438,13 +461,15 @@ async function processHttpClientJob(job) {
   job.attempts += 1;
   console.log(`[PRINT_AGENT] Processing HTTP client job ${job.id} (Attempt ${job.attempts})`);
   
+  const isUsb = IS_RECEIPT_USB && (job.type === 'CUSTOMER_RECEIPT' || job.type === 'BILL' || job.destination.toLowerCase().includes('receipt'));
+  
   try {
     const buffer = compileEscpos(job.payload);
     if (!buffer || buffer.length <= 10) {
       throw new Error('Invalid ESC/POS payload compiled.');
     }
     
-    await writeToPrinter(job.ip, job.port, buffer);
+    await writeToPrinter(job.ip, job.port, buffer, isUsb);
     job.status = 'PRINTED';
     job.printedAt = Date.now();
     job.lastError = null;
@@ -605,7 +630,7 @@ const server = http.createServer((req, res) => {
 ================================
 Date: ${new Date().toLocaleString()}
 Status: Connection Verified
-Port: Raw TCP Socket 9100
+Port: ${IS_RECEIPT_USB ? 'USB Raw /dev/usb/lp0' : `Raw TCP Socket ${port}`}
 
 Format Verification:
 - Center alignments: Successful
@@ -617,7 +642,8 @@ Format Verification:
 ================================
 \n\n\n`;
         const buffer = compileEscpos(testText);
-        await writeToPrinter(ip, Number(port), buffer);
+        const isUsb = IS_RECEIPT_USB && (ip.toLowerCase() === 'usb' || ip === '127.0.0.1' || Number(port) === 9101 || ip.includes('usb'));
+        await writeToPrinter(ip, Number(port), buffer, isUsb);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, status: 'PRINTED' }));
       } catch (e) {
