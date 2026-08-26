@@ -86,7 +86,7 @@ export async function sendToNetworkPrinter(
   const targetPort = Number(kind === 'kitchen' ? cfg.kitchenPort : (cfg.receiptPort || cfg.kitchenPort || 9100));
 
   try {
-    dataStore.updatePrintJobStatus(jobId, 'PRINTING');
+    // Attempt local HTTP bridge fast-path (silently caught if unreachable)
     const res = await fetch(`http://${cfg.bridgeHost}:${cfg.bridgePort}/print`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -99,54 +99,46 @@ export async function sendToNetworkPrinter(
         port: targetPort
       }),
     });
-    if (!res.ok) {
-      const errText = await res.text().catch(() => 'Print bridge network failure');
-      dataStore.updatePrintJobStatus(jobId, 'FAILED', { lastError: errText });
-      return false;
-    }
-    const body = await res.json().catch(() => null);
-    if (body?.ok === true) {
-      if (body.status === 'PRINTED') {
-        dataStore.updatePrintJobStatus(jobId, 'PRINTED', { printedAt: Date.now(), attempts: 1 });
-      } else {
-        dataStore.updatePrintJobStatus(jobId, 'PRINTING', { attempts: 1 });
-        setTimeout(() => pollJobStatus(jobId), 1000);
+    
+    if (res.ok) {
+      const body = await res.json().catch(() => null);
+      if (body?.ok === true) {
+        if (body.status === 'PRINTED') {
+          dataStore.updatePrintJobStatus(jobId, 'PRINTED', { printedAt: Date.now(), attempts: 1 });
+        } else {
+          dataStore.updatePrintJobStatus(jobId, 'PRINTING', { attempts: 1 });
+          setTimeout(() => pollJobStatus(jobId), 1000);
+        }
+        return true;
       }
-      return true;
-    } else {
-      dataStore.updatePrintJobStatus(jobId, 'FAILED', { lastError: body?.error || 'Bridge rejected print job' });
-      return false;
     }
+    // If local bridge responded but rejected or failed, rely on database queue sync.
+    console.log('[PrintBridge] Local bridge request not completed. Relying on Supabase sync queue.');
+    return true; // Return true so client treats it as queued/pending instead of crashing
   } catch (e: any) {
-    console.warn('[PrintBridge] Bridge unreachable:', e);
-    dataStore.updatePrintJobStatus(jobId, 'FAILED', { lastError: e.message || 'Bridge unreachable' });
-    return false;
+    // If local bridge is unreachable (e.g. Mixed Content or offline), do NOT update status to FAILED in DB!
+    // Leave status as QUEUED in Supabase so the background print bridge daemon on Cashier PC prints it!
+    console.log('[PrintBridge] Local HTTP bridge not reachable. Relying on Supabase queue sync.');
+    return true; // Return true to indicate job is successfully enqueued in database
   }
 }
 
 export async function retryNetworkPrintJob(jobId: string): Promise<boolean> {
+  // Set print job status back to QUEUED in Supabase so the background print bridge daemon processes it
+  dataStore.updatePrintJobStatus(jobId, 'QUEUED', { lastError: null, attempts: 0 });
+
   const cfg = getPrinterConfig();
   try {
-    dataStore.updatePrintJobStatus(jobId, 'PRINTING');
-    const res = await fetch(`http://${cfg.bridgeHost}:${cfg.bridgePort}/print/retry`, {
+    // Fire-and-forget attempt on local HTTP bridge
+    fetch(`http://${cfg.bridgeHost}:${cfg.bridgePort}/print/retry`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: jobId }),
-    });
-    if (!res.ok) {
-      dataStore.updatePrintJobStatus(jobId, 'FAILED', { lastError: 'Retry post failed' });
-      return false;
-    }
-    const body = await res.json().catch(() => null);
-    if (body?.ok) {
-      setTimeout(() => pollJobStatus(jobId), 1000);
-      return true;
-    }
-    return false;
-  } catch (e: any) {
-    dataStore.updatePrintJobStatus(jobId, 'FAILED', { lastError: e.message || 'Retry request unreachable' });
-    return false;
+    }).catch(() => {});
+  } catch (e) {
+    // Ignored, database sync will process it
   }
+  return true;
 }
 
 export async function testNetworkPrinter(kind: 'kitchen' | 'receipt'): Promise<boolean> {
