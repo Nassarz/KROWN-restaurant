@@ -3,65 +3,288 @@
  * KROWN POS - Network Thermal Printer Bridge (Secure Local Print Agent)
  * ---------------------------------------------------------------------
  * Runs on the Cashier computer. Binds strictly to 127.0.0.1:9101 for safety.
- * Handles print queuing, retries, ESC/POS parsing, and direct TCP socket
- * communication to ethernet printers on port 9100.
+ * Handles print queuing, Supabase database queue syncing, ESC/POS compiling,
+ * and direct TCP socket communication to ethernet printers on port 9100.
  */
 
 import http from 'node:http';
 import net from 'node:net';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const HTTP_PORT = parseInt(process.argv[2] === '--port' ? process.argv[3] : '9101', 10);
 
-// In-memory print job queue
+// In-memory print job queue for HTTP client requests
 const jobs = [];
 
-// Helper to convert formatted text into ESC/POS binary buffer
-function escposText(text) {
-  const trimmed = text.trimEnd();
-  // ESC/POS character formatting
+// ── ENV LOADER (Zero-dependency .env.local parser) ───────────────────────────
+function loadEnv() {
+  const envPath = path.resolve(process.cwd(), '.env.local');
+  if (!fs.existsSync(envPath)) {
+    console.warn('[PRINT_AGENT] Warning: .env.local not found. Running in standalone HTTP mode.');
+    return {};
+  }
+  const config = {};
+  try {
+    const content = fs.readFileSync(envPath, 'utf8');
+    content.split('\n').forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return;
+      const idx = trimmed.indexOf('=');
+      if (idx > 0) {
+        const key = trimmed.slice(0, idx).trim();
+        let val = trimmed.slice(idx + 1).trim();
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        config[key] = val;
+      }
+    });
+  } catch (err) {
+    console.error('[PRINT_AGENT] Failed to read .env.local:', err.message);
+  }
+  return config;
+}
+
+const env = loadEnv();
+const KITCHEN_PRINTER_IP = env.KITCHEN_PRINTER_IP || '192.168.1.100';
+const KITCHEN_PRINTER_PORT = parseInt(env.KITCHEN_PRINTER_PORT || '9100', 10);
+const RECEIPT_PRINTER_IP = env.RECEIPT_PRINTER_IP || '192.168.1.101';
+const RECEIPT_PRINTER_PORT = parseInt(env.RECEIPT_PRINTER_PORT || '9100', 10);
+
+// ── SUPABASE CLIENT INITIALIZATION ──────────────────────────────────────────
+let supabase = null;
+const supabaseUrl = env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (supabaseUrl && supabaseKey) {
+  try {
+    const { createClient } = await import('@supabase/supabase-js');
+    supabase = createClient(supabaseUrl, supabaseKey, {
+      auth: { persistSession: false }
+    });
+    console.log('[PRINT_AGENT] Supabase client initialized successfully.');
+  } catch (err) {
+    console.error('[PRINT_AGENT] Failed to load @supabase/supabase-js library:', err.message);
+  }
+} else {
+  console.warn('[PRINT_AGENT] NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing in .env.local. Supabase sync disabled.');
+}
+
+// ── ADVANCED ESC/POS COMPILER ────────────────────────────────────────────────
+function compileEscpos(payload, paperWidth = '80mm') {
+  let order = null;
+  try {
+    if (payload.trim().startsWith('{')) {
+      order = JSON.parse(payload);
+    }
+  } catch (e) {
+    // Not JSON, fallback to plain text compile
+  }
+
   const chunks = [];
-  chunks.push(Buffer.from([0x1b, 0x40]));                    // ESC @ (Initialize printer)
-  chunks.push(Buffer.from([0x1b, 0x74, 0x00]));              // Set code page to CP437 (default standard characters)
-  
-  // Clean text and ensure character translation is safe (e.g. replace smart quotes if printer doesn't support them)
-  const cleaned = text
-    .replace(/[\u2018\u2019]/g, "'") // smart single quotes
-    .replace(/[\u201c\u201d]/g, '"') // smart double quotes
-    .replace(/[\u2013\u2014]/g, '-'); // en/em dash
+  const lineLength = paperWidth === '58mm' ? 32 : 48;
+
+  // ESC/POS Command Constants
+  const ESC = 0x1B;
+  const GS = 0x1D;
+
+  const INIT = Buffer.from([ESC, 0x40]);                     // Initialize printer
+  const CODE_PAGE = Buffer.from([ESC, 0x74, 0x00]);           // CP437 Character Set
+  const ALIGN_LEFT = Buffer.from([ESC, 0x61, 0x00]);          // Left align
+  const ALIGN_CENTER = Buffer.from([ESC, 0x61, 0x01]);        // Center align
+  const ALIGN_RIGHT = Buffer.from([ESC, 0x61, 0x02]);         // Right align
+  const BOLD_ON = Buffer.from([ESC, 0x45, 0x01]);             // Bold text on
+  const BOLD_OFF = Buffer.from([ESC, 0x45, 0x00]);            // Bold text off
+  const SIZE_NORMAL = Buffer.from([GS, 0x21, 0x00]);          // Normal text size
+  const SIZE_DOUBLE_HW = Buffer.from([GS, 0x21, 0x11]);       // Double width & height
+  const FEED_PAPER = Buffer.from([ESC, 0x64, 0x04]);          // Feed 4 lines before cut
+  const CUT_PAPER = Buffer.from([GS, 0x56, 0x01]);            // Partial cut command
+
+  chunks.push(INIT);
+  chunks.push(CODE_PAGE);
+
+  if (order) {
+    // ── JSON ORDER OBJECT COMPILE ──
+    const center = (txt) => {
+      chunks.push(ALIGN_CENTER);
+      chunks.push(Buffer.from(txt + '\n', 'ascii'));
+    };
+
+    const leftRight = (left, right) => {
+      chunks.push(ALIGN_LEFT);
+      const space = lineLength - right.length;
+      let leftPart = left;
+      if (leftPart.length > space - 1) {
+        leftPart = leftPart.slice(0, space - 1);
+      }
+      const padding = space - leftPart.length;
+      chunks.push(Buffer.from(leftPart + ' '.repeat(Math.max(1, padding)) + right + '\n', 'ascii'));
+    };
+
+    // Header Title
+    chunks.push(SIZE_DOUBLE_HW, BOLD_ON);
+    center('INTCORE POS');
+    chunks.push(SIZE_NORMAL, BOLD_OFF);
+
+    center((order.branchName || 'Krown Kampala').toUpperCase());
+    center(order.branchAddress || order.location || 'Kampala, Uganda');
+    center(`TEL: ${order.branchPhone || '+256 772 100 200'}`);
+    if (order.branchTaxId) {
+      center(order.branchTaxId);
+    }
     
-  chunks.push(Buffer.from(cleaned + '\n', 'ascii'));         // CP437 works best with standard ascii
-  
-  // GS V B 0 (Paper feed and cut)
-  chunks.push(Buffer.from([0x1d, 0x56, 0x42, 0x00]));        // Feed and partial cut
+    chunks.push(ALIGN_LEFT);
+    chunks.push(Buffer.from('='.repeat(lineLength) + '\n', 'ascii'));
+
+    // Ticket Type Header
+    chunks.push(BOLD_ON, ALIGN_CENTER);
+    if (order.ticketType === 'prep' || order.isPrep) {
+      center('*** KITCHEN ORDER TICKET ***');
+    } else if (order.ticketType === 'cashier_order') {
+      center('*** CUSTOMER BILL - UNPAID ***');
+    } else {
+      center('*** OFFICIAL PAYMENT RECEIPT ***');
+    }
+    chunks.push(BOLD_OFF, ALIGN_LEFT);
+
+    // Metadata details
+    leftRight('ORDER NUMBER:', `#${(order.id || '').toUpperCase()}`);
+    leftRight('TABLE ID:', `${order.table || 'T1'}`);
+    leftRight('SEATING AREA:', `${order.place || 'Main Dining'}`);
+    leftRight('ORDER TYPE:', `${order.type || 'Dine In'}`);
+    leftRight('DATE / TIME:', new Date(order.createdAt || Date.now()).toLocaleString());
+    if (order.tinNumber) {
+      leftRight('CUSTOMER TIN:', order.tinNumber);
+    }
+    if (order.paymentMethod) {
+      leftRight('PAYMENT METHOD:', order.paymentMethod);
+    }
+
+    chunks.push(Buffer.from('-'.repeat(lineLength) + '\n', 'ascii'));
+    leftRight('ITEM DESCRIPTION', 'PRICE');
+    chunks.push(Buffer.from('-'.repeat(lineLength) + '\n', 'ascii'));
+
+    // Cart Items loop
+    if (order.items && Array.isArray(order.items)) {
+      order.items.forEach(item => {
+        const itemTitle = `${item.quantity}x ${item.name}`;
+        const priceVal = ((item.price || 0) * item.quantity);
+        const priceStr = `UGX ${priceVal.toLocaleString()}`;
+        leftRight(itemTitle, priceStr);
+        if (item.note) {
+          chunks.push(ALIGN_LEFT);
+          chunks.push(Buffer.from(`  * NOTE: ${item.note}\n`, 'ascii'));
+        }
+      });
+    }
+
+    chunks.push(Buffer.from('='.repeat(lineLength) + '\n', 'ascii'));
+    leftRight('TOTAL AMOUNT:', `UGX ${(order.total || 0).toLocaleString()}`);
+    if (order.amountReceived) {
+      leftRight('CASH RECEIVED:', `UGX ${Number(order.amountReceived).toLocaleString()}`);
+    }
+    if (order.changeAmount !== undefined) {
+      leftRight('CHANGE DUE:', `UGX ${Number(order.changeAmount).toLocaleString()}`);
+    }
+    chunks.push(Buffer.from('='.repeat(lineLength) + '\n', 'ascii'));
+    center('Powered by INTCORE POS');
+    chunks.push(Buffer.from('\n\n\n', 'ascii'));
+  } else {
+    // ── PLAIN TEXT RECEIPT COMPILE ──
+    const cleanedText = payload
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u201c\u201d]/g, '"')
+      .replace(/[\u2013\u2014]/g, '-');
+
+    const lines = cleanedText.split('\n');
+    lines.forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        chunks.push(Buffer.from('\n', 'ascii'));
+        return;
+      }
+
+      // 1. Dividers
+      if (trimmed.startsWith('-') || trimmed.startsWith('=')) {
+        chunks.push(ALIGN_LEFT, SIZE_NORMAL, BOLD_OFF);
+        const char = trimmed[0];
+        chunks.push(Buffer.from(char.repeat(lineLength) + '\n', 'ascii'));
+        return;
+      }
+
+      // 2. Main Title (Double Size / Bold)
+      if (trimmed === 'INTCORE POS') {
+        chunks.push(ALIGN_CENTER, SIZE_DOUBLE_HW, BOLD_ON);
+        chunks.push(Buffer.from(trimmed + '\n', 'ascii'));
+        chunks.push(SIZE_NORMAL, BOLD_OFF);
+        return;
+      }
+
+      // 3. Section Titles (Bold / Center)
+      if (trimmed.startsWith('***') && trimmed.endsWith('***')) {
+        chunks.push(ALIGN_CENTER, SIZE_NORMAL, BOLD_ON);
+        chunks.push(Buffer.from(trimmed + '\n', 'ascii'));
+        chunks.push(BOLD_OFF);
+        return;
+      }
+
+      // 4. Center-aligned Text checks
+      const leadingSpaces = line.length - line.trimStart().length;
+      const expectedPadding = Math.floor((lineLength - trimmed.length) / 2);
+
+      if (leadingSpaces > 0 && Math.abs(leadingSpaces - expectedPadding) <= 2) {
+        chunks.push(ALIGN_CENTER, SIZE_NORMAL);
+        const shouldBold = trimmed.includes('TOTAL DUE:') || trimmed.includes('TOTAL AMOUNT PAID:') || trimmed.includes('*** PAID') || trimmed.includes('*** CUSTOMER BILL');
+        if (shouldBold) chunks.push(BOLD_ON);
+        chunks.push(Buffer.from(trimmed + '\n', 'ascii'));
+        if (shouldBold) chunks.push(BOLD_OFF);
+      } else {
+        // 5. Left-aligned text
+        chunks.push(ALIGN_LEFT, SIZE_NORMAL);
+        const shouldBold = trimmed.includes('TOTAL DUE:') || trimmed.includes('TOTAL AMOUNT PAID:');
+        if (shouldBold) chunks.push(BOLD_ON);
+        chunks.push(Buffer.from(line + '\n', 'ascii'));
+        if (shouldBold) chunks.push(BOLD_OFF);
+      }
+    });
+  }
+
+  // Paper cut sequence
+  chunks.push(FEED_PAPER);
+  chunks.push(CUT_PAPER);
   return Buffer.concat(chunks);
 }
 
-// Low-level socket writer
+// ── LOW-LEVEL TCP SOCKET WRITER ──────────────────────────────────────────────
 function writeToPrinter(ip, port, escposBuffer) {
   return new Promise((resolve, reject) => {
-    console.log(`[PRINT_AGENT] PRINTER_CONNECTION_ESTABLISHED to ${ip}:${port}`);
+    console.log(`[PRINT_AGENT] TCP_CONNECTION_INITIATED to ${ip}:${port}`);
     const socket = net.createConnection({ host: ip, port }, () => {
-      console.log(`[PRINT_AGENT] BYTES_SENT to ${ip}:${port} (${escposBuffer.length} bytes)`);
+      console.log(`[PRINT_AGENT] Connection established. Sending ${escposBuffer.length} bytes.`);
       socket.write(escposBuffer);
       socket.end();
     });
     
-    socket.setTimeout(5000, () => {
+    socket.setTimeout(8000, () => {
       socket.destroy();
-      reject(new Error(`TIMEOUT connecting to network printer at ${ip}:${port}`));
+      reject(new Error(`Connection timeout reaching printer at ${ip}:${port}`));
     });
     
     socket.on('error', (err) => {
-      reject(err);
+      reject(new Error(`Socket error: ${err.message}`));
     });
     
     socket.on('close', (hadError) => {
-      if (!hadError) resolve(true);
+      if (!hadError) {
+        console.log('[PRINT_AGENT] Socket connection closed cleanly.');
+        resolve(true);
+      }
     });
   });
 }
 
-// TCP port 9100 health connectivity checker
+// ── CONNECTION CONNECTIVITY CHECKER ──────────────────────────────────────────
 function testConnection(ip, port) {
   return new Promise((resolve) => {
     const socket = net.createConnection({ host: ip, port }, () => {
@@ -73,12 +296,12 @@ function testConnection(ip, port) {
     
     socket.on('timeout', () => {
       socket.destroy();
-      resolve({ ok: false, status: 'UNREACHABLE', error: 'TIMEOUT (printer powered off or client isolated)' });
+      resolve({ ok: false, status: 'UNREACHABLE', error: 'TIMEOUT (Printer offline or bridge isolated)' });
     });
     
     socket.on('error', (err) => {
       if (err.code === 'ECONNREFUSED') {
-        resolve({ ok: false, status: 'PORT_CLOSED', error: 'PORT CLOSED / PRINTER SERVICE UNAVAILABLE' });
+        resolve({ ok: false, status: 'PORT_CLOSED', error: 'TCP Port 9100 Refused Connection' });
       } else {
         resolve({ ok: false, status: 'UNREACHABLE', error: err.message });
       }
@@ -86,33 +309,136 @@ function testConnection(ip, port) {
   });
 }
 
-// Process a print job
-async function processJob(job) {
+// ── SUPABASE DATABASE QUEUE POLLER & LISTENER ─────────────────────────────────
+async function pollDatabaseQueue() {
+  if (!supabase) return;
+  try {
+    const { data: queuedJobs, error } = await supabase
+      .from('print_jobs')
+      .select('*')
+      .in('status', ['QUEUED', 'pending'])
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.error('[PRINT_AGENT] Supabase polling fetch error:', error.message);
+      return;
+    }
+
+    if (queuedJobs && queuedJobs.length > 0) {
+      console.log(`[PRINT_AGENT] Found ${queuedJobs.length} queued jobs in database.`);
+      for (const job of queuedJobs) {
+        await processDatabaseJob(job);
+      }
+    }
+  } catch (err) {
+    console.error('[PRINT_AGENT] Database polling exception:', err.message);
+  }
+}
+
+async function processDatabaseJob(job) {
+  const attempts = (job.attempts || 0) + 1;
+  
+  // Set printing state to prevent overlapping runs
+  const { error: lockError } = await supabase
+    .from('print_jobs')
+    .update({ status: 'PRINTING', attempts })
+    .eq('id', job.id);
+
+  if (lockError) {
+    console.error(`[PRINT_AGENT] Could not lock job ${job.id}:`, lockError.message);
+    return;
+  }
+
+  console.log(`[PRINT_AGENT] Processing job ${job.id} from database. attempts: ${attempts}`);
+
+  // Resolve target static IP & Port
+  let ip = KITCHEN_PRINTER_IP;
+  let port = KITCHEN_PRINTER_PORT;
+
+  if (job.printer_id === 'receipt' || job.destination.toLowerCase().includes('receipt')) {
+    ip = RECEIPT_PRINTER_IP;
+    port = RECEIPT_PRINTER_PORT;
+  }
+
+  try {
+    const escposBuffer = compileEscpos(job.payload);
+    await writeToPrinter(ip, port, escposBuffer);
+
+    // Success Status
+    await supabase
+      .from('print_jobs')
+      .update({
+        status: 'PRINTED', // maps to completed
+        printed_at: Date.now(),
+        last_error: null
+      })
+      .eq('id', job.id);
+
+    console.log(`[PRINT_AGENT] ✓ Job ${job.id} printed and updated to printed.`);
+  } catch (err) {
+    console.error(`[PRINT_AGENT] ✗ Job ${job.id} failed:`, err.message);
+    
+    // Failed Status
+    await supabase
+      .from('print_jobs')
+      .update({
+        status: 'FAILED', // maps to failed
+        last_error: err.message
+      })
+      .eq('id', job.id);
+  }
+}
+
+function startDatabaseQueueListener() {
+  if (!supabase) return;
+
+  console.log('[PRINT_AGENT] Initializing queue polling (every 3 seconds)...');
+  setInterval(pollDatabaseQueue, 3000);
+
+  console.log('[PRINT_AGENT] Subscribing to Supabase Realtime print_jobs...');
+  try {
+    supabase
+      .channel('print_jobs_sync')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'print_jobs' }, async (payload) => {
+        const job = payload.new;
+        if (job && (job.status === 'QUEUED' || job.status === 'pending')) {
+          console.log(`[PRINT_AGENT] Realtime insert captured for job ${job.id}`);
+          processDatabaseJob(job).catch(e => console.error('[PRINT_AGENT] Realtime handling error:', e.message));
+        }
+      })
+      .subscribe((status) => {
+        console.log(`[PRINT_AGENT] Supabase realtime connection status: ${status}`);
+      });
+  } catch (err) {
+    console.warn('[PRINT_AGENT] Realtime initialization exception:', err.message);
+  }
+}
+
+// ── HTTP CLIENT SERVER REQUEST HANDLER ───────────────────────────────────────
+async function processHttpClientJob(job) {
   job.status = 'PRINTING';
   job.attempts += 1;
-  console.log(`[PRINT_AGENT] Processing job ${job.id} (Attempt ${job.attempts})`);
+  console.log(`[PRINT_AGENT] Processing HTTP client job ${job.id} (Attempt ${job.attempts})`);
   
   try {
-    const buffer = escposText(job.payload);
-    if (!buffer || buffer.length <= 10) { // ESC @ + cut is ~6 bytes, so 10 is a safe threshold
-      throw new Error('Empty or invalid ESC/POS buffer generated');
+    const buffer = compileEscpos(job.payload);
+    if (!buffer || buffer.length <= 10) {
+      throw new Error('Invalid ESC/POS payload compiled.');
     }
     
     await writeToPrinter(job.ip, job.port, buffer);
     job.status = 'PRINTED';
     job.printedAt = Date.now();
     job.lastError = null;
-    console.log(`[PRINT_AGENT] PRINT_SUCCESS for job ${job.id}`);
+    console.log(`[PRINT_AGENT] HTTP client job ${job.id} printed successfully.`);
   } catch (err) {
     job.status = 'FAILED';
     job.lastError = err.message;
-    console.error(`[PRINT_AGENT] PRINT_FAILED for job ${job.id}: ${err.message}`);
+    console.error(`[PRINT_AGENT] HTTP client job ${job.id} failed: ${err.message}`);
   }
 }
 
-// Create HTTP server
 const server = http.createServer((req, res) => {
-  // CORS configuration (allow requests from localhost or standard POS origins)
   const origin = req.headers.origin;
   if (origin && (origin.startsWith('http://localhost') || origin.startsWith('https://krown-restaurant-pos'))) {
     res.setHeader('Access-Control-Allow-Origin', origin);
@@ -132,7 +458,7 @@ const server = http.createServer((req, res) => {
   // GET /health
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, service: 'krown-print-bridge', jobsCount: jobs.length }));
+    res.end(JSON.stringify({ ok: true, service: 'krown-print-bridge', localJobs: jobs.length, databaseConnected: !!supabase }));
     return;
   }
 
@@ -152,7 +478,7 @@ const server = http.createServer((req, res) => {
         const { ip, port } = JSON.parse(body);
         if (!ip || !port) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'ip and port required' }));
+          res.end(JSON.stringify({ ok: false, error: 'ip and port fields are required' }));
           return;
         }
         const result = await testConnection(ip, Number(port));
@@ -172,28 +498,22 @@ const server = http.createServer((req, res) => {
     req.on('data', c => body += c);
     req.on('end', async () => {
       try {
-        console.log('[PRINT_AGENT] PRINT_AGENT_RECEIVED request');
         const parsed = JSON.parse(body);
         const { id, orderId, type, text, ip, port } = parsed;
         
-        // Payload validation to prevent raw byte injection
         if (!id || !type || !text || !ip || !port) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'id, type, text, ip, port required for print validation' }));
+          res.end(JSON.stringify({ ok: false, error: 'id, type, text, ip, and port are required' }));
           return;
         }
 
-        // Check for duplicate print job ID (Idempotency)
         let existingJob = jobs.find(j => j.id === id);
         if (existingJob) {
-          console.log(`[PRINT_AGENT] Duplicate print job ID detected: ${id}. Returning status: ${existingJob.status}`);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: true, status: existingJob.status, isDuplicate: true }));
           return;
         }
 
-        // Register new print job
-        console.log(`[PRINT_AGENT] PRINT_REQUEST_CREATED for order ${orderId} (${type})`);
         const newJob = {
           id,
           orderId,
@@ -210,13 +530,11 @@ const server = http.createServer((req, res) => {
         };
         jobs.push(newJob);
 
-        // Process print job asynchronously
-        processJob(newJob);
+        processHttpClientJob(newJob);
 
         res.writeHead(202, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, status: 'QUEUED', jobId: id }));
       } catch (e) {
-        console.error('[PRINT_AGENT] Enqueue failed:', e.message);
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: e.message }));
       }
@@ -238,9 +556,7 @@ const server = http.createServer((req, res) => {
           return;
         }
         
-        console.log(`[PRINT_AGENT] Retrying failed job ${id}`);
-        processJob(job);
-        
+        processHttpClientJob(job);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, status: 'PRINTING' }));
       } catch (e) {
@@ -260,7 +576,7 @@ const server = http.createServer((req, res) => {
         const { ip, port } = JSON.parse(body);
         if (!ip || !port) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'ip and port required' }));
+          res.end(JSON.stringify({ ok: false, error: 'ip and port fields are required' }));
           return;
         }
         
@@ -270,24 +586,19 @@ const server = http.createServer((req, res) => {
           PRINTER TEST
 ================================
 Date: ${new Date().toLocaleString()}
-Status: Local Network OK
-Connection: TCP/IP Port 9100
+Status: Connection Verified
+Port: Raw TCP Socket 9100
 
-Readable characters test:
-- Numbers: 0123456789
-- Punctuation: & / ( ) ' , .
-- Currency: UGX 15,000 / $ 5.00
-
-Wrapping text test:
-This is a long test line to verify
-that text wraps correctly at the
-configured 80mm column boundary.
+Format Verification:
+- Center alignments: Successful
+- Bold text alignments: Successful
+- Standard double size titles: Yes
 
 ================================
           TEST SUCCESS
 ================================
 \n\n\n`;
-        const buffer = escposText(testText);
+        const buffer = compileEscpos(testText);
         await writeToPrinter(ip, Number(port), buffer);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, status: 'PRINTED' }));
@@ -303,8 +614,8 @@ configured 80mm column boundary.
   res.end('Not Found');
 });
 
-// Bind strictly to localhost (127.0.0.1) for local POS security
+// Start TCP listener
 server.listen(HTTP_PORT, '127.0.0.1', () => {
   console.log(`KROWN Secure Print Bridge listening on http://127.0.0.1:${HTTP_PORT}`);
-  console.log('Configure settings in POS: bridge host 127.0.0.1, bridge port 9101.');
+  startDatabaseQueueListener();
 });
