@@ -1,5 +1,5 @@
 import { formatUGX } from './mockData';
-import { sendToNetworkPrinter } from './printBridge';
+import { sendToNetworkPrinter, getPrinterConfig } from './printBridge';
 import { jsPDF } from 'jspdf';
 import { dataStore } from './dataStore';
 
@@ -281,6 +281,14 @@ export async function printTicket(
   const sent = await sendToNetworkPrinter(formattedText, kind, jobId, order.id, dbType);
   if (sent) {
     console.log(`[PRINTER] Sent ${ticketType} to network printer via bridge.`);
+    return true;
+  }
+
+  // If printer bridge is enabled, bypass the web-based iframe print dialog fallback.
+  // The print bridge daemon running on the Cashier PC will process the job from Supabase.
+  const cfg = getPrinterConfig();
+  if (cfg.enabled) {
+    console.log(`[PRINTER] Job registered in queue. Handled via network print bridge daemon.`);
     return true;
   }
 
