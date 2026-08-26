@@ -166,44 +166,53 @@ export default function ManagerInventory({ ingredients, user, branchId }: { ingr
     if (typeof window === 'undefined') return;
     const printWin = window.open('', '_blank');
     if (!printWin) return;
-    const rowsHtml = activeItems.map(i => `
-      <tr>
-        <td style="padding: 8px; border-bottom: 1px solid #eee; font-weight: bold;">${i.name}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee;">${i.category}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee; font-weight: bold; color: ${i.quantity <= i.minThreshold ? 'red' : 'green'};">${i.quantity} ${i.unit}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee;">${formatUGX(i.costPerUnitUGX)}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee;">${i.deductFromSales ? '✓ Enabled' : 'Disabled'}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee;">${i.supplier}</td>
-      </tr>
+
+    const paperWidth = '80mm';
+    const divider = '-'.repeat(48);
+    const doubleDivider = '='.repeat(48);
+
+    const itemsHtml = activeItems.map(i => `
+      <div style="margin-bottom: 8px;">
+        <div style="font-weight: bold;">${i.name.toUpperCase()} (${i.category})</div>
+        <div class="justify">
+          <span>Stock: ${i.quantity} ${i.unit} ${i.quantity <= i.minThreshold ? '(!LOW)' : ''}</span>
+          <span>Cost: ${formatUGX(i.costPerUnitUGX)}</span>
+        </div>
+        <div class="justify" style="font-size: 11px; color: #333;">
+          <span>Supplier: ${i.supplier || 'N/A'}</span>
+          <span>Auto Deduct: ${i.deductFromSales ? 'YES' : 'NO'}</span>
+        </div>
+      </div>
+      <div>${divider}</div>
     `).join('');
 
     printWin.document.write(`
       <html>
         <head>
-          <title>KROWN POS - Official Inventory Report</title>
+          <title>Inventory Report - Thermal</title>
           <style>
-            body { font-family: system-ui, sans-serif; padding: 30px; color: #111; }
-            h1 { margin-bottom: 4px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 13px; }
-            th { text-align: left; background: #f4f4f6; padding: 10px; font-weight: bold; }
+            @page { size: ${paperWidth} auto; margin: 0; }
+            body {
+              font-family: 'Courier New', Courier, monospace;
+              width: ${paperWidth};
+              padding: 10px;
+              margin: 0 auto;
+              font-size: 13px;
+              line-height: 1.3;
+              color: #000;
+            }
+            .center { text-align: center; font-weight: bold; }
+            .justify { display: flex; justify-content: space-between; }
           </style>
         </head>
         <body>
-          <h1>KROWN ENTERPRISE POS - INVENTORY & STOCK LEDGER</h1>
-          <p style="color: #666; font-size: 12px;">Generated on: ${new Date().toLocaleString()}</p>
-          <table>
-            <thead>
-              <tr>
-                <th>Ingredient</th>
-                <th>Category</th>
-                <th>Current Stock</th>
-                <th>Unit Cost</th>
-                <th>Auto Deduct</th>
-                <th>Supplier</th>
-              </tr>
-            </thead>
-            <tbody>${rowsHtml}</tbody>
-          </table>
+          <div class="center">KROWN POS</div>
+          <div class="center">INVENTORY & STOCK LEDGER</div>
+          <div class="center">Generated: ${new Date().toLocaleString()}</div>
+          <div>${doubleDivider}</div>
+          ${itemsHtml}
+          <div class="center">Powered by Krown POS</div>
+          <br/><br/><br/>
         </body>
       </html>
     `);

@@ -142,54 +142,62 @@ export default function AdminCompanies({ currentBranchId }: { currentBranchId?: 
     const printWin = window.open('', '_blank');
     if (!printWin) return;
 
-    const rowsHtml = companyOrdersList.map(o => `
-      <tr>
-        <td style="padding: 8px; border-bottom: 1px solid #eee; font-family: monospace;">#${o.id.slice(-6).toUpperCase()}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee;">${o.companyStaffName || 'Staff'} (${o.workId || 'N/A'})</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee;">Table ${o.table}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee;">${o.branchName}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee;">${new Date(o.createdAt).toLocaleDateString()}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee; font-weight: bold; text-align: right;">${formatUGX(o.total)}</td>
-      </tr>
+    const paperWidth = '80mm';
+    const divider = '-'.repeat(48);
+    const doubleDivider = '='.repeat(48);
+
+    const ordersHtml = companyOrdersList.map(o => `
+      <div style="margin-bottom: 6px;">
+        <div class="justify">
+          <span style="font-weight: bold;">#${o.id.slice(-6).toUpperCase()} (${new Date(o.createdAt).toLocaleDateString()})</span>
+          <span style="font-weight: bold;">${formatUGX(o.total)}</span>
+        </div>
+        <div style="font-size: 11px; color: #333;">
+          Staff: ${o.companyStaffName || 'Staff'} (${o.workId || 'N/A'})
+        </div>
+        <div style="font-size: 11px; color: #333;">
+          Table: ${o.table} • Branch: ${o.branchName}
+        </div>
+      </div>
+      <div>${divider}</div>
     `).join('');
 
     printWin.document.write(`
       <html>
         <head>
-          <title>Corporate Credit Statement - ${activeCompany.name}</title>
+          <title>Company Credit Statement - Thermal</title>
           <style>
-            body { font-family: system-ui, sans-serif; padding: 30px; color: #111; }
-            h1 { margin-bottom: 4px; }
-            .header-info { display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 13px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 12px; }
-            th { text-align: left; background: #f4f4f6; padding: 10px; font-weight: bold; }
+            @page { size: ${paperWidth} auto; margin: 0; }
+            body {
+              font-family: 'Courier New', Courier, monospace;
+              width: ${paperWidth};
+              padding: 10px;
+              margin: 0 auto;
+              font-size: 13px;
+              line-height: 1.3;
+              color: #000;
+            }
+            .center { text-align: center; font-weight: bold; }
+            .justify { display: flex; justify-content: space-between; }
           </style>
         </head>
         <body>
-          <h1>${activeCompany.name} - Corporate Credit Statement</h1>
-          <div class="header-info">
-            <div>
-              <p><strong>Tax ID:</strong> ${activeCompany.taxId}</p>
-              <p><strong>Contact Person:</strong> ${activeCompany.contactPerson} (${activeCompany.phone})</p>
-            </div>
-            <div style="text-align: right;">
-              <p><strong>Credit Limit:</strong> ${formatUGX(activeCompany.creditLimitUGX)}</p>
-              <p><strong>Current Outstanding Balance:</strong> <span style="color: #ea580c; font-size: 16px; font-weight: bold;">${formatUGX(activeCompany.currentBalanceUGX)}</span></p>
-            </div>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>Order Ref</th>
-                <th>Staff Name (Work ID)</th>
-                <th>Table</th>
-                <th>Branch</th>
-                <th>Date</th>
-                <th style="text-align: right;">Amount (UGX)</th>
-              </tr>
-            </thead>
-            <tbody>${rowsHtml}</tbody>
-          </table>
+          <div class="center">KROWN POS</div>
+          <div class="center">CORPORATE CREDIT STATEMENT</div>
+          <div class="center">${activeCompany.name.toUpperCase()}</div>
+          <div>${divider}</div>
+          <div class="justify"><span>Tax ID:</span> <span>${activeCompany.taxId}</span></div>
+          <div class="justify"><span>Phone:</span> <span>${activeCompany.phone}</span></div>
+          <div class="justify"><span>Credit Limit:</span> <span>${formatUGX(activeCompany.creditLimitUGX)}</span></div>
+          <div class="justify" style="font-weight: bold; color: red;"><span>Outstanding Bal:</span> <span>${formatUGX(activeCompany.currentBalanceUGX)}</span></div>
+          <div>${doubleDivider}</div>
+          
+          <div class="center">TRANSACTIONS LOG</div>
+          <div>${doubleDivider}</div>
+          ${ordersHtml}
+          
+          <div class="center">Powered by Krown POS</div>
+          <br/><br/><br/>
         </body>
       </html>
     `);

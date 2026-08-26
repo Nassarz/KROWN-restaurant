@@ -99,43 +99,52 @@ export default function ManagerPage({ user, setView }: { user: any, setView: (v:
     if (typeof window === 'undefined') return;
     const printWin = window.open('', '_blank');
     if (!printWin) return;
+    
+    const paperWidth = '80mm';
+    const divider = '-'.repeat(48);
+    const doubleDivider = '='.repeat(48);
+    
     printWin.document.write(`
       <html>
         <head>
-          <title>KROWN POS - Manager Financial Statement</title>
+          <title>Finance Statement - Thermal</title>
           <style>
-            body { font-family: system-ui, sans-serif; padding: 30px; color: #111; }
-            h1 { margin-bottom: 4px; }
-            .card { background: #f4f4f6; padding: 15px; border-radius: 12px; margin-bottom: 15px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-            th, td { text-align: left; padding: 8px; border-bottom: 1px solid #ddd; }
+            @page { size: ${paperWidth} auto; margin: 0; }
+            body {
+              font-family: 'Courier New', Courier, monospace;
+              width: ${paperWidth};
+              padding: 10px;
+              margin: 0 auto;
+              font-size: 13px;
+              line-height: 1.3;
+              color: #000;
+            }
+            .center { text-align: center; font-weight: bold; }
+            .justify { display: flex; justify-content: space-between; }
           </style>
         </head>
         <body>
-          <h1>KROWN POS - BRANCH FINANCIAL STATEMENT</h1>
-          <p style="color: #666; font-size: 12px;">Generated on: ${new Date().toLocaleString()}</p>
-
-          <div class="card">
-            <h3>Gross Revenue: ${formatUGX(grossSales)}</h3>
-            <h3>Total Operating Expenses: ${formatUGX(totalExpenses)}</h3>
-            <h2>Net Operating Profit: ${formatUGX(netProfit)}</h2>
-          </div>
-
-          <h3>Payment Methods Breakdown</h3>
-          <table>
-            <thead>
-              <tr><th>Payment Method</th><th>Total Revenue</th><th>Percentage</th></tr>
-            </thead>
-            <tbody>
-              ${Object.entries(paymentBreakdown).map(([method, data]) => `
-                <tr>
-                  <td><b>${method}</b></td>
-                  <td>${formatUGX(data.total)}</td>
-                  <td>${data.percentage}%</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
+          <div class="center">KROWN POS</div>
+          <div class="center">BRANCH FINANCIAL STATEMENT</div>
+          <div class="center">Generated: ${new Date().toLocaleString()}</div>
+          <div>${doubleDivider}</div>
+          
+          <div class="justify"><span>Gross Revenue:</span> <span>${formatUGX(grossSales)}</span></div>
+          <div class="justify"><span>Total Expenses:</span> <span>${formatUGX(totalExpenses)}</span></div>
+          <div class="justify" style="font-weight: bold;"><span>Net Operating Profit:</span> <span>${formatUGX(netProfit)}</span></div>
+          <div>${divider}</div>
+          
+          <div class="center">PAYMENT METHODS BREAKDOWN</div>
+          <div>${divider}</div>
+          ${Object.entries(paymentBreakdown).map(([method, data]) => `
+            <div class="justify">
+              <span>${method}:</span>
+              <span>${formatUGX(data.total)} (${data.percentage}%)</span>
+            </div>
+          `).join('')}
+          <div>${doubleDivider}</div>
+          <div class="center">Powered by Krown POS</div>
+          <br/><br/><br/>
         </body>
       </html>
     `);
