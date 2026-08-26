@@ -1,5 +1,6 @@
 import { formatUGX } from './mockData';
 import { sendToNetworkPrinter } from './printBridge';
+import { jsPDF } from 'jspdf';
 
 export function generateFormattedThermalReceipt(
   order: any,
@@ -143,8 +144,7 @@ export function generateFormattedThermalReceipt(
     return text;
   }
 
-  text += formatLine('Subtotal:', formatUGX(subtotal)) + '\n';
-  text += formatLine('VAT (18%):', formatUGX(tax)) + '\n';
+  // Subtotal and tax lines removed per user request (menu is tax-inclusive)
   text += doubleDivider + '\n';
   if (ticketType === 'cashier_order') {
     text += formatLine('TOTAL DUE AT CASHIER:', formatUGX(total)) + '\n';
@@ -159,16 +159,36 @@ export function generateFormattedThermalReceipt(
 }
 
 export function downloadReceiptFile(order: any) {
-  const receiptContent = generateFormattedThermalReceipt(order, '80mm', 'receipt');
-  const blob = new Blob([receiptContent], { type: 'text/plain;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `Receipt_${(order.id || 'order').toUpperCase()}.txt`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  const paperWidth = '80mm';
+  const ticketType = 'receipt';
+  const text = generateFormattedThermalReceipt(order, paperWidth, ticketType);
+
+  // Split text into lines
+  const lines = text.split('\n');
+
+  // Configure jsPDF
+  // 1 pt = 1/72 inch, 1 mm = 72 / 25.4 = ~2.83 points. 80 mm = ~226.8 points.
+  const pdfWidthPts = 226.8; 
+  const pdfHeightPts = Math.max(300, (lines.length * 11) + 40);
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'pt',
+    format: [pdfWidthPts, pdfHeightPts]
+  });
+
+  // Set monospace font (Courier)
+  doc.setFont('Courier', 'normal');
+  doc.setFontSize(8.5); // Fits perfectly on 80mm wide page (48 chars max)
+
+  // Write line by line
+  let y = 20;
+  lines.forEach((line) => {
+    doc.text(line, 10, y);
+    y += 11;
+  });
+
+  doc.save(`Receipt_${(order.id || 'order').toUpperCase()}.pdf`);
 }
 
 export async function printTicket(
@@ -185,13 +205,30 @@ export async function printTicket(
   const sent = await sendToNetworkPrinter(formattedText, kind);
   if (sent) {
     console.log(`[PRINTER] Sent ${ticketType} to network printer via bridge.`);
-    return;
+    return true;
   }
 
+  // Fallback: Web-based printing using dynamic hidden iframe (never blocked by popup blockers!)
   if (typeof window !== 'undefined') {
-    const printWindow = window.open('', '_blank', 'width=400,height=600');
-    if (printWindow) {
-      printWindow.document.write(`
+    // Check if there is an existing print iframe and remove it
+    const existing = document.getElementById('krown-print-iframe');
+    if (existing) {
+      document.body.removeChild(existing);
+    }
+
+    const iframe = document.createElement('iframe');
+    iframe.id = 'krown-print-iframe';
+    iframe.style.position = 'absolute';
+    iframe.style.width = '0px';
+    iframe.style.height = '0px';
+    iframe.style.border = '0px';
+    iframe.style.left = '-9999px';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow?.document || iframe.contentDocument;
+    if (doc) {
+      doc.open();
+      doc.write(`
         <html>
           <head>
             <title>Thermal Receipt - #${order.id} [${ticketType.toUpperCase()}]</title>
@@ -212,19 +249,28 @@ export async function printTicket(
           <body>${formattedText.trimEnd() + '\n'}</body>
         </html>
       `);
-      printWindow.document.close();
-      printWindow.focus();
-      setTimeout(() => {
-        try {
-          printWindow.print();
-          printWindow.close();
-        } catch (e) {
-          console.warn('[PRINTER] Thermal print execution note:', e);
-        }
-      }, 250);
-      return;
+      doc.close();
     }
+
+    setTimeout(() => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch (e) {
+        console.warn('[PRINTER] Iframe print error:', e);
+      } finally {
+        // Wait a bit before removing to allow print command handover in some browsers
+        setTimeout(() => {
+          if (iframe.parentNode) {
+            document.body.removeChild(iframe);
+          }
+        }, 1000);
+      }
+    }, 250);
+
+    return true;
   }
+  return false;
 }
 
 /**

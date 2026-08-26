@@ -467,6 +467,7 @@ class DataStoreEngine {
   private expenses: Expense[] = [];
   private listeners: Set<Listener> = new Set();
   private seeded = false;
+  private customCategories: string[] = [];
   private onlineStaffPresence: Array<{ staffId: string; email?: string; branch?: string; assignedBranchId?: string }> = [];
 
   constructor() {
@@ -502,6 +503,8 @@ class DataStoreEngine {
         if (sOrders) this.orders = JSON.parse(sOrders);
         const sProds = localStorage.getItem('krown_products');
         if (sProds) this.products = JSON.parse(sProds);
+        const sCats = localStorage.getItem('krown_categories');
+        if (sCats) this.customCategories = JSON.parse(sCats);
       } catch (e) {
         console.warn('[DataStore] loadLocal parse warning:', e);
       }
@@ -686,6 +689,7 @@ class DataStoreEngine {
       localStorage.setItem('krown_cstaff',      JSON.stringify(this.companyStaff));
       localStorage.setItem('krown_zones',       JSON.stringify(this.zones));
       localStorage.setItem('krown_expenses',    JSON.stringify(this.expenses));
+      localStorage.setItem('krown_categories',  JSON.stringify(this.customCategories));
     } catch { /* ignore */ }
     this.notify();
   }
@@ -815,6 +819,26 @@ class DataStoreEngine {
   }
 
   public getBranches(): Branch[] { return this.branches; }
+
+  public getCustomCategories(): string[] {
+    return this.customCategories;
+  }
+
+  public addCustomCategory(cat: string) {
+    const cleaned = cat.trim();
+    if (cleaned) {
+      const exists = this.customCategories.some(c => c.toLowerCase() === cleaned.toLowerCase());
+      if (!exists) {
+        this.customCategories = [...this.customCategories, cleaned];
+        this.persistLocal();
+      }
+    }
+  }
+
+  public deleteCustomCategory(cat: string) {
+    this.customCategories = this.customCategories.filter(c => c.toLowerCase() !== cat.trim().toLowerCase());
+    this.persistLocal();
+  }
 
   public getStaff(branchId?: string): StaffMember[] {
     if (branchId && branchId !== 'all') {
@@ -1031,8 +1055,8 @@ class DataStoreEngine {
           }
         });
         const grandTotal = mergedItems.reduce((sum, i) => sum + (i.price * i.quantity), 0);
-        const tax = Math.round(grandTotal - (grandTotal / 1.18));
-        const subtotal = grandTotal - tax;
+        const tax = 0;
+        const subtotal = grandTotal;
         const updated: Order = { ...o, items: mergedItems, subtotal, tax, total: grandTotal };
         targetOrder = updated;
 

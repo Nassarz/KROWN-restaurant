@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Plus, Edit3, Image as ImageIcon, Loader2 } from 'lucide-react';
-import { vibrate } from '@/lib/utils';
+import { Search, Plus, Edit3, Image as ImageIcon, Loader2, Trash2, X } from 'lucide-react';
+import { vibrate, getCategoryIcon } from '@/lib/utils';
 import { formatUGX } from '@/lib/mockData';
 import { dataStore } from '@/lib/dataStore';
 
@@ -21,12 +21,37 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
   const [recipe, setRecipe] = useState<{ ingredientId: string; quantityPerUnit: number }[]>([]);
   const [addOns, setAddOns] = useState<{ id: string; name: string; priceUGX: string }[]>([]);
 
+  const [showCatsModal, setShowCatsModal] = useState(false);
+  const [newCatName, setNewCatName] = useState('');
+  const [customCats, setCustomCats] = useState<string[]>(() => dataStore.getCustomCategories());
+
   useEffect(() => {
     const unsub = dataStore.subscribe(() => {
       setDisplayProducts(dataStore.getProducts(managerBranchId));
+      setCustomCats(dataStore.getCustomCategories());
     });
     return () => unsub();
   }, [managerBranchId]);
+
+  const allCategories = useMemo(() => {
+    const fromProducts = displayProducts.map(p => (p.category || 'Mains').trim());
+    return Array.from(new Set([...fromProducts, ...customCats])).filter(Boolean);
+  }, [displayProducts, customCats]);
+
+  const handleAddCat = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCatName.trim()) return;
+    dataStore.addCustomCategory(newCatName);
+    setCustomCats(dataStore.getCustomCategories());
+    setNewCatName('');
+    vibrate(20);
+  };
+
+  const handleDeleteCat = (cat: string) => {
+    vibrate(30);
+    dataStore.deleteCustomCategory(cat);
+    setCustomCats(dataStore.getCustomCategories());
+  };
 
   const [formData, setFormData] = useState({
     name: '',
@@ -149,12 +174,21 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
           <h2 className="text-3xl font-bold text-slate-900 dark:text-white tracking-tight">Menu Items</h2>
           <p className="text-slate-500 font-medium text-xs">Manage menu prices, availability, and recipe stock deductions</p>
         </div>
-        <button 
-          onClick={() => { vibrate(20); openAdd(); }}
-          className="bg-orange-500 hover:bg-orange-600 text-white px-5 py-2.5 rounded-2xl font-bold text-xs flex items-center gap-2 shadow-lg shadow-orange-500/20 transition-all active:scale-95"
-        >
-          <Plus className="w-4 h-4" /> Add New Item
-        </button>
+        <div className="flex gap-2">
+          <button 
+            type="button"
+            onClick={() => { vibrate(20); setShowCatsModal(true); }}
+            className="bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20 text-slate-900 dark:text-white px-5 py-2.5 rounded-2xl font-bold text-xs flex items-center gap-2 transition-all active:scale-95 border border-black/5 dark:border-white/5"
+          >
+            Manage Categories
+          </button>
+          <button 
+            onClick={() => { vibrate(20); openAdd(); }}
+            className="bg-orange-500 hover:bg-orange-600 text-white px-5 py-2.5 rounded-2xl font-bold text-xs flex items-center gap-2 shadow-lg shadow-orange-500/20 transition-all active:scale-95"
+          >
+            <Plus className="w-4 h-4" /> Add New Item
+          </button>
+        </div>
       </div>
 
       <div className="bg-white/80 dark:bg-[#121214]/80 backdrop-blur-2xl border border-white/40 dark:border-white/5 shadow-2xl rounded-[2rem] p-6 ring-1 ring-black/5 dark:ring-white/10 flex-1 flex flex-col overflow-hidden">
@@ -254,9 +288,18 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Price (UGX) *</label>
                   <input required type="number" step="0.01" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} className="w-full border dark:border-white/10 rounded-xl p-3 bg-slate-50 dark:bg-black/20 dark:text-white font-bold text-sm focus:ring-2 focus:ring-orange-500 outline-none" />
                 </div>
-                <div>
+                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Category</label>
-                  <input required value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full border dark:border-white/10 rounded-xl p-3 bg-slate-50 dark:bg-black/20 dark:text-white text-sm focus:ring-2 focus:ring-orange-500 outline-none" />
+                  <input 
+                    required 
+                    list="categories-list"
+                    value={formData.category} 
+                    onChange={e => setFormData({...formData, category: e.target.value})} 
+                    className="w-full border dark:border-white/10 rounded-xl p-3 bg-slate-50 dark:bg-black/20 dark:text-white text-sm focus:ring-2 focus:ring-orange-500 outline-none" 
+                  />
+                  <datalist id="categories-list">
+                    {allCategories.map(cat => <option key={cat} value={cat} />)}
+                  </datalist>
                 </div>
 
                 {/* Recipe Editor */}
@@ -396,6 +439,78 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
           </div>
         )}
       </AnimatePresence>
+      {/* Categories Manager Modal */}
+      <AnimatePresence>
+        {showCatsModal && (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }} 
+              animate={{ scale: 1, opacity: 1 }} 
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white dark:bg-[#121214] w-full max-w-md rounded-[2.5rem] p-6 shadow-2xl space-y-4 border border-black/10 dark:border-white/10 flex flex-col max-h-[80vh]"
+            >
+              <div className="flex justify-between items-center pb-2 border-b border-black/5 dark:border-white/5">
+                <h3 className="text-xl font-bold dark:text-white">Manage Menu Categories</h3>
+                <button onClick={() => setShowCatsModal(false)} className="p-1 hover:bg-slate-100 dark:hover:bg-white/10 rounded-lg">
+                  <X className="w-5 h-5 text-slate-500" />
+                </button>
+              </div>
+
+              {/* Add Category Form */}
+              <form onSubmit={handleAddCat} className="flex gap-2">
+                <input 
+                  type="text" 
+                  required
+                  placeholder="New Category (e.g. Pastries)..."
+                  value={newCatName}
+                  onChange={e => setNewCatName(e.target.value)}
+                  className="flex-1 border dark:border-white/10 rounded-xl p-2.5 bg-slate-50 dark:bg-black/20 dark:text-white text-xs font-semibold focus:ring-2 focus:ring-orange-500 outline-none"
+                />
+                <button 
+                  type="submit" 
+                  className="bg-orange-500 hover:bg-orange-600 text-white px-4 rounded-xl text-xs font-bold transition-all active:scale-95"
+                >
+                  Add
+                </button>
+              </form>
+
+              {/* Categories List */}
+              <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                <span className="text-[10px] uppercase font-extrabold text-slate-400 tracking-wider block">Active Categories</span>
+                {allCategories.map(cat => {
+                  const isCustom = customCats.some(c => c.toLowerCase() === cat.toLowerCase());
+                  return (
+                    <div key={cat} className="flex items-center justify-between bg-slate-50 dark:bg-black/20 p-3 rounded-xl border border-black/5 dark:border-white/5">
+                      <div className="flex items-center gap-2.5">
+                        <span className="text-lg">{getCategoryIcon(cat)}</span>
+                        <span className="font-bold text-xs text-slate-900 dark:text-white">{cat}</span>
+                      </div>
+                      {isCustom ? (
+                        <button 
+                          type="button"
+                          onClick={() => handleDeleteCat(cat)} 
+                          className="p-1.5 hover:bg-red-500/10 text-red-500 rounded-lg transition-colors"
+                          title="Remove custom category"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      ) : (
+                        <span className="text-[9px] font-bold text-slate-400 bg-slate-200/50 dark:bg-white/10 px-2 py-0.5 rounded">
+                          Linked
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <datalist id="categories-list">
+        {allCategories.map(c => <option key={c} value={c} />)}
+      </datalist>
     </div>
   );
 }

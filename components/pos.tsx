@@ -1,30 +1,18 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Home, Grid, UtensilsCrossed, ShoppingCart, Clock, 
   Settings, Plus, Minus, Search, LogOut, Shield, Sun, Moon, Store, Check, CreditCard, Banknote, Smartphone, DollarSign, Building2, FileText, X
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { vibrate } from '@/lib/utils';
+import { vibrate, getCategoryIcon } from '@/lib/utils';
 import { placeOrderAtomic } from '@/lib/transactions';
 import { useNotification } from '@/hooks/use-notification';
 import { autoPrintKitchenTicket } from '@/lib/printer';
 import { formatUGX } from '@/lib/mockData';
 import { dataStore } from '@/lib/dataStore';
-
-const CATEGORIES = [
-  { id: 'all', name: 'All Menu', icon: '✨' },
-  { id: 'local', name: 'Local Specialties', icon: '🍲' },
-  { id: 'pizza', name: 'Pizza', icon: '🍕' },
-  { id: 'burger', name: 'Burger', icon: '🍔' },
-  { id: 'mains', name: 'Mains', icon: '🥩' },
-  { id: 'sushi', name: 'Sushi', icon: '🍣' },
-  { id: 'appetizers', name: 'Appetizers', icon: '🥗' },
-  { id: 'drinks', name: 'Drinks', icon: '🍹' },
-  { id: 'dessert', name: 'Dessert', icon: '🍰' }
-];
 
 export default function POSPage({ user, setView, activeStaff }: { user: any; setView: (v: 'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier') => void; activeStaff?: any }) {
   const [activeCategory, setActiveCategory] = useState('all');
@@ -33,6 +21,19 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
   // 'use client' component — always mounted on the client, no SSR hydration guard needed
   const mounted = true;
   const [products, setProducts] = useState<any[]>([]);
+  const [customCategories, setCustomCategories] = useState<string[]>([]);
+
+  const categoriesList = useMemo(() => {
+    const fromProducts = products.map(p => (p.category || 'Mains').trim());
+    const uniqueCats = Array.from(new Set([...fromProducts, ...customCategories])).filter(Boolean);
+    const list = uniqueCats.map(cat => ({
+      id: cat.toLowerCase(),
+      name: cat,
+      icon: getCategoryIcon(cat)
+    }));
+    return [{ id: 'all', name: 'All Menu', icon: '✨' }, ...list];
+  }, [products, customCategories]);
+
   const [isProcessing, setIsProcessing] = useState(false);
   const [isDark, setIsDark] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -87,6 +88,7 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
       const c = dataStore.getCompanies(activeBranchId);
       setCompanies(c);
       setSelectedCompanyId(prev => prev || (c[0]?.id || ''));
+      setCustomCategories(dataStore.getCustomCategories());
       const startOfToday = new Date();
       startOfToday.setHours(0, 0, 0, 0);
       const startOfTodayMs = startOfToday.getTime();
@@ -162,8 +164,8 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
     return (item.price * item.quantity) + addOnsTotal;
   };
   const grandTotal = cart.reduce((sum, item) => sum + itemLineTotal(item), 0);
-  const tax = Math.round(grandTotal - (grandTotal / 1.18)); // 18% URA VAT included in price
-  const subtotal = grandTotal - tax; // Net pre-tax subtotal
+  const tax = 0; // Omit separate tax calculations to record same amount (taxes are inclusive)
+  const subtotal = grandTotal; // Net pre-tax subtotal is same as total
   const total = grandTotal; // Total payable (VAT Inclusive)
 
   const currentZone = zones.find(z => z.id === activeZoneId) || zones[0];
@@ -204,7 +206,9 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
         if (existingOpen) {
           const updated = dataStore.addItemsToOrder(existingOpen.id, cart);
           if (updated) {
-            autoPrintKitchenTicket(updated);
+            if (updated.type !== 'Dine In') {
+              autoPrintKitchenTicket(updated);
+            }
             vibrate([50, 100, 50]);
             setOrderConfirmation({ ...updated, appendedToExisting: true, existingOrderId: existingOpen.id });
             setCart([]);
@@ -239,8 +243,10 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
       
       // KITCHEN ISOLATION RULE: Automatically print ONLY Kitchen Order Ticket (KOT).
       // NO customer receipt is printed on the POS/waiter side — receipts are printed
-      // by the Cashier or Manager only.
-      autoPrintKitchenTicket(placed);
+      // only print KOT for Takeaway/Delivery from POS. Dine In prints nothing from POS.
+      if (placed.type !== 'Dine In') {
+        autoPrintKitchenTicket(placed);
+      }
 
       vibrate([50, 100, 50]);
       setOrderConfirmation(placed);
@@ -259,7 +265,7 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
   };
 
   const filteredProducts = products.filter(p => 
-    (activeCategory === 'all' || p.category === activeCategory) &&
+    (activeCategory === 'all' || p.category?.toLowerCase() === activeCategory) &&
     p.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
     p.available !== false
   );
@@ -582,7 +588,7 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
 
                 {/* Categories */}
                 <div className="flex gap-4 overflow-x-auto no-scrollbar pb-2 mask-linear-fade">
-                  {CATEGORIES.map(cat => (
+                  {categoriesList.map(cat => (
                     <button
                       key={cat.id}
                       onClick={() => { vibrate(15); setActiveCategory(cat.id); }}
