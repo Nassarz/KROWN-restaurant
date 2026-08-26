@@ -12,6 +12,13 @@ import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '@/lib/supabase';
 import type { StaffMember } from '@/lib/mockData';
 import { dataStore } from '@/lib/dataStore';
+import {
+  cacheOfflineAuth,
+  storeOfflinePasswordHash,
+  verifyOfflineCredentials,
+  getCachedOfflineProfile,
+  isOffline
+} from '@/lib/offlineAuth';
 
 export default function AppRouter() {
   const [user, setUser] = useState<any>(null);
@@ -81,6 +88,11 @@ export default function AppRouter() {
           dbStaff = byEmail;
         }
 
+        if (!dbStaff) {
+          // OFFLINE: Supabase unreachable — restore from the local offline cache
+          dbStaff = getCachedOfflineProfile(authUser.email || '');
+        }
+
         if (dbStaff) {
           const staff: StaffMember = {
             id: dbStaff.id,
@@ -91,7 +103,6 @@ export default function AppRouter() {
             assignedBranchId: dbStaff.assigned_branch_id || null,
             status: dbStaff.status || 'active',
             avatar: dbStaff.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(dbStaff.name || 'Staff')}&background=f97316&color=fff&bold=true&size=200`,
-            pin: dbStaff.pin || '0000',
           };
           setUser({ uid: staff.id, displayName: staff.name, email: staff.email, photoURL: staff.avatar });
           setActiveStaff(staff);
@@ -109,9 +120,21 @@ export default function AppRouter() {
       }
     };
 
-    // Check existing session on mount
+    // Check existing session on mount (Enforce Auto-Logout on Browser/Tab Close or Shutdown)
+    const isTabSessionActive = typeof window !== 'undefined' && sessionStorage.getItem('krown_active_session') === 'true';
+
     supabase.auth.getSession().then(({ data: { session } }) => {
-      restoreStaffSession(session?.user ?? null);
+      if (session && !isTabSessionActive) {
+        // Browser or tab was closed/reopened or machine restarted -> Auto Log Out
+        supabase.auth.signOut().then(() => {
+          setUser(null);
+          setActiveStaff(null);
+          setView('pos');
+          setLoading(false);
+        });
+      } else {
+        restoreStaffSession(session?.user ?? null);
+      }
     });
 
     // Listen for auth changes (login/logout from other tabs)
@@ -178,23 +201,55 @@ export default function AppRouter() {
     let foundStaff: StaffMember | undefined;
 
     // Step 1: Authenticate via Supabase Auth (the single source of truth)
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-      email: cleanEmail,
-      password: password,
-    });
+    // OFFLINE MODE: during an internet blackout, verify against the cached
+    // credentials stored on this device from the last successful login.
+    let authData: any = null;
+    let authError: any = null;
+    try {
+      const res = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password: password,
+      });
+      authData = res.data;
+      authError = res.error;
+    } catch (e: any) {
+      authError = e;
+    }
 
     if (authError) {
-      // Supabase Auth rejected the credentials — surface the correct error
-      if (authError.message.toLowerCase().includes('invalid login credentials') ||
-          authError.message.toLowerCase().includes('invalid_credentials') ||
-          authError.message.toLowerCase().includes('invalid email or password')) {
-        setLoginError('Wrong email or password. Please try again.');
-      } else if (authError.message.toLowerCase().includes('email not confirmed')) {
-        setLoginError('Please confirm your email address before logging in.');
-      } else if (authError.message.toLowerCase().includes('too many requests')) {
-        setLoginError('Too many login attempts. Please wait a few minutes.');
+      // Network failure or invalid credentials — try the offline cache
+      const offlineEntry = await verifyOfflineCredentials(cleanEmail, password);
+      if (offlineEntry && offlineEntry.staff) {
+        const s = offlineEntry.staff;
+        const staff: StaffMember = {
+          id: s.id,
+          name: s.name || cleanEmail.split('@')[0],
+          email: s.email || cleanEmail,
+          role: s.role || 'Senior Waiter',
+          branch: s.branch || 'Global HQ',
+          assignedBranchId: s.assigned_branch_id || s.assignedBranchId || null,
+          status: s.status || 'active',
+          avatar: s.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(s.name || 'Staff')}&background=f97316&color=fff&bold=true&size=200`,
+        };
+        foundStaff = staff;
+        console.warn('[OFFLINE AUTH] Verified from local cache — operating without internet.');
+      } else if (authError.message?.toLowerCase().includes('failed to fetch') ||
+                 authError.message?.toLowerCase().includes('network') ||
+                 isOffline()) {
+        setLoginError('OFFLINE MODE: No internet detected and no cached login for this account. Connect to the internet once to cache your credentials, or check the connection.');
       } else {
-        setLoginError(`Login error: ${authError.message}`);
+        // Supabase Auth rejected the credentials — surface the correct error
+        if (authError.message.toLowerCase().includes('invalid login credentials') ||
+            authError.message.toLowerCase().includes('invalid_credentials') ||
+            authError.message.toLowerCase().includes('invalid email or password')) {
+          setLoginError('Wrong email or password. Please try again.');
+        } else if (authError.message.toLowerCase().includes('email not confirmed')) {
+          setLoginError('Please confirm your email address before logging in.');
+        } else if (authError.message.toLowerCase().includes('too many requests')) {
+          setLoginError('Too many login attempts. Please wait a few minutes.');
+        } else {
+          setLoginError(`Login error: ${authError.message}`);
+        }
       }
       setIsSubmitting(false);
       return;
@@ -237,7 +292,6 @@ export default function AppRouter() {
           status: dbStaff.status || 'active',
           avatar: dbStaff.avatar ||
             `https://ui-avatars.com/api/?name=${encodeURIComponent(dbStaff.name || 'Staff')}&background=f97316&color=fff&bold=true&size=200`,
-          pin: dbStaff.pin || '0000',
         };
       } else {
         // No staff record exists yet — auto-create a profile from the auth user's metadata
@@ -262,7 +316,6 @@ export default function AppRouter() {
           assignedBranchId: assignedBranchId,
           status: 'active',
           avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=f97316&color=fff&bold=true&size=200`,
-          pin: authData.user.user_metadata?.pin || '1234',
         };
 
         // Persist the auto-created profile to the staff table
@@ -302,7 +355,16 @@ export default function AppRouter() {
         email: foundStaff.email,
         photoURL: foundStaff.avatar,
       });
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('krown_active_session', 'true');
+      }
       setActiveStaff(foundStaff);
+
+      // Cache credentials + profile for offline login during internet blackouts
+      try {
+        await storeOfflinePasswordHash(cleanEmail, password);
+        await cacheOfflineAuth(foundStaff, { uid: foundStaff.id, displayName: foundStaff.name, email: foundStaff.email, photoURL: foundStaff.avatar });
+      } catch { /* non-fatal */ }
 
       // Auto-route to the correct dashboard by role
       if (foundStaff.role === 'Super Admin') setView('admin');

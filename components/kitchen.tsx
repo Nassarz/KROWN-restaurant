@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 
 import { ChefHat, CheckCircle, Clock, ChevronLeft, Printer } from 'lucide-react';
@@ -13,9 +13,11 @@ export default function KitchenPage({ setView, activeStaff }: { setView: (v: 'po
   const [orders, setOrders] = useState<any[]>([]);
   const [now, setNow] = useState(() => Date.now());
   const { notify } = useNotification();
+  const autoPrinted = useRef(new Set());
 
   const role = activeStaff?.role || 'Head Chef';
   const isSuperAdmin = role === 'Super Admin' || role === 'Branch Manager';
+  const activeBranchId = activeStaff?.assignedBranchId;
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60000);
@@ -24,14 +26,23 @@ export default function KitchenPage({ setView, activeStaff }: { setView: (v: 'po
 
   useEffect(() => {
     const syncOrders = () => {
-      const live = dataStore.getOrders().filter(o => o.status === 'pending' || o.status === 'preparing');
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      const startOfTodayMs = startOfToday.getTime();
+      const live = dataStore.getOrders(activeBranchId, startOfTodayMs).filter(o => o.status === 'pending' || o.status === 'preparing');
       setOrders(live);
+      const fresh = live.filter(o => !autoPrinted.current.has(o.id));
+      fresh.forEach(o => {
+        autoPrinted.current.add(o.id);
+        printTicket('prep', o);
+      });
+      if (fresh.length > 0) notify('new-order');
     };
 
     syncOrders();
     const unsub = dataStore.subscribe(syncOrders);
     return () => unsub();
-  }, []);
+  }, [activeBranchId]);
 
   const updateOrderStatus = (order: any, newStatus: any) => {
     vibrate(40);
@@ -58,7 +69,7 @@ export default function KitchenPage({ setView, activeStaff }: { setView: (v: 'po
         </div>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 items-start">
         <AnimatePresence>
           {orders.map(order => (
             <motion.div
@@ -106,7 +117,7 @@ export default function KitchenPage({ setView, activeStaff }: { setView: (v: 'po
                 </div>
               </div>
               
-              <div className="flex-1 space-y-3 mb-6 overflow-y-auto custom-scrollbar pr-2 min-h-[150px]">
+              <div className="flex-1 space-y-3 mb-6 overflow-y-auto custom-scrollbar pr-2 min-h-0">
                 {order.items?.map((item: any, idx: number) => (
                   <div key={idx} className="flex justify-between items-start border-b border-slate-100 dark:border-white/5 pb-2">
                     <div className="flex gap-3">

@@ -23,7 +23,6 @@ function mapDbToStaff(row: any): StaffMember {
     assignedBranchId: row.assigned_branch_id || null,
     status: row.status || 'active',
     avatar: row.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(row.name || 'S')}&background=f97316&color=fff&bold=true&size=200`,
-    pin: row.pin || '0000',
     phone: row.phone,
     idType: row.id_type,
     idNumber: row.id_number,
@@ -59,19 +58,29 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
     setIsLoading(true);
     try {
       let query = supabase.from('staff').select('*').order('created_at', { ascending: false });
+      const b = currentBranchId ? dataStore.getBranches().find(x => x.id === currentBranchId) : undefined;
       if (currentBranchId && currentBranchId !== 'all') {
-        query = supabase.from('staff').select('*')
-          .or(`assigned_branch_id.eq.${currentBranchId},branch.eq.${currentBranchId},role.eq.Super Admin`)
-          .order('created_at', { ascending: false });
+        if (b) {
+          query = supabase.from('staff').select('*')
+            .or(`assigned_branch_id.eq.${currentBranchId},branch.eq.${b.name}`)
+            .order('created_at', { ascending: false });
+        } else {
+          query = supabase.from('staff').select('*')
+            .eq('assigned_branch_id', currentBranchId)
+            .order('created_at', { ascending: false });
+        }
       }
       const { data, error } = await query;
       if (error) throw error;
-      const mapped = (data || []).map(mapDbToStaff);
+      let mapped = (data || []).map(mapDbToStaff);
+      if (currentBranchId && currentBranchId !== 'all') {
+        mapped = mapped.filter(s => s.role !== 'Super Admin' && (s.assignedBranchId === currentBranchId || s.branch === currentBranchId || (b && s.branch === b.name)));
+      }
       setStaff(mapped);
       dataStore.syncStaffFromDB(mapped);
     } catch (err) {
       console.error('[ManagerStaff] Load error:', err);
-      setStaff(dataStore.getStaff(currentBranchId));
+      setStaff(dataStore.getStaff(currentBranchId).filter(s => currentBranchId === 'all' || s.role !== 'Super Admin'));
     } finally {
       setIsLoading(false);
     }
@@ -106,18 +115,26 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
 
   // Run Auth sync once on mount
   useEffect(() => {
-    fetch('/api/admin/sync-staff', { method: 'POST' })
-      .then(res => res.json())
-      .then(json => {
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+
+        const res = await fetch('/api/admin/sync-staff', { method: 'POST', headers });
+        const json = await res.json();
         if (json.success && Array.isArray(json.staff)) {
           dataStore.syncStaffFromDB(json.staff);
           loadStaff();
         }
-      })
-      .catch(e => console.warn('[ManagerStaff] Initial Auth sync notice:', e));
+      } catch (e) {
+        console.warn('[ManagerStaff] Initial Auth sync notice:', e);
+      }
+    })();
   }, [loadStaff]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadStaff();
     loadBranches();
 
@@ -160,9 +177,13 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
     const staffEmail = email.trim() || `${name.toLowerCase().replace(/\s+/g, '.')}@krownpos.com`;
 
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+
       const res = await fetch('/api/admin/create-staff', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           name: name.trim(),
           email: staffEmail,
@@ -212,20 +233,38 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
   // ── Staff Actions ─────────────────────────────────────────────────────────
   const handleAction = async (action: string, staffMember: StaffMember, extra?: any) => {
     try {
+      if (action === 'delete') {
+        dataStore.deleteStaff(staffMember.id);
+        setStaff(prev => prev.filter(s => s.id !== staffMember.id));
+      } else if (action === 'update_status' && extra?.status) {
+        dataStore.updateStaffStatus(staffMember.id, extra.status);
+        setStaff(prev => prev.map(s => s.id === staffMember.id ? { ...s, status: extra.status } : s));
+      } else if (action === 'update_role' && extra?.role) {
+        dataStore.updateStaffRole(staffMember.id, extra.role);
+        setStaff(prev => prev.map(s => s.id === staffMember.id ? { ...s, role: extra.role } : s));
+      } else if (action === 'promote_admin') {
+        dataStore.updateStaffRole(staffMember.id, 'Super Admin');
+        setStaff(prev => prev.map(s => s.id === staffMember.id ? { ...s, role: 'Super Admin', branch: 'Global HQ' } : s));
+      }
+
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+
       const res = await fetch('/api/admin/manage-staff', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ action, staffId: staffMember.id, ...extra })
       });
       const json = await res.json();
       if (json.success) {
-        showToast('success', json.message || 'Done');
+        showToast('success', json.message || 'Action completed successfully');
         await loadStaff(); // Refresh from Supabase
       } else {
         showToast('error', json.error || 'Action failed');
       }
     } catch (err: any) {
-      showToast('error', err?.message || 'Network error');
+      showToast('error', err?.message || 'Network error performing action');
     }
   };
 
@@ -310,7 +349,7 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
             </div>
             <div>
               <p className="font-bold text-slate-700 dark:text-white">No Staff Enrolled Yet</p>
-              <p className="text-slate-500 text-sm mt-1">Click "Enroll New Staff" to add your first team member.</p>
+              <p className="text-slate-500 text-sm mt-1">Click &quot;Enroll New Staff&quot; to add your first team member.</p>
             </div>
           </div>
         ) : (

@@ -1,18 +1,60 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://your-supabase-project.supabase.co';
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
+// Always use the service role key for server-side DB writes (bypasses RLS cleanly).
+// If service role key is not configured, fall back to anon key — the RLS policy
+// "staff_allow_full_access" ensures anon writes succeed for this POS system.
+function buildDbClient() {
+  const key = (SUPABASE_SERVICE_ROLE_KEY && SUPABASE_SERVICE_ROLE_KEY.length > 20)
+    ? SUPABASE_SERVICE_ROLE_KEY
+    : SUPABASE_ANON_KEY;
+  return createClient(SUPABASE_URL, key, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
+
 export async function POST(req: Request) {
+  const dbClient = buildDbClient();
+  const hasServiceRole = Boolean(
+    SUPABASE_SERVICE_ROLE_KEY && SUPABASE_SERVICE_ROLE_KEY.length > 20
+  );
+
+  // ── Authorization: only authenticated Super Admin / Branch Manager staff ──
+  const authHeader = req.headers.get('authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return NextResponse.json({ error: 'Missing Authorization token' }, { status: 401 });
+  }
+  const checkClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { data: userData, error: userErr } = await checkClient.auth.getUser(authHeader.slice(7));
+  if (userErr || !userData?.user) {
+    return NextResponse.json({ error: 'Unauthorized: invalid session' }, { status: 401 });
+  }
+  const sessionEmail = userData.user.email?.toLowerCase() || '';
+  const { data: actor } = await dbClient
+    .from('staff')
+    .select('id, role, status')
+    .eq('email', sessionEmail)
+    .maybeSingle();
+  if (!actor || actor.status !== 'active') {
+    return NextResponse.json({ error: 'Unauthorized: staff record not found or inactive' }, { status: 403 });
+  }
+  if (actor.role !== 'Super Admin' && actor.role !== 'Branch Manager') {
+    return NextResponse.json({ error: 'Forbidden: Super Admin or Branch Manager role required' }, { status: 403 });
+  }
+
   try {
     const body = await req.json();
     const {
       name,
       email,
-      password = 'Staff@123',
-      pin = '1234',
+      password: inputPassword,
+      pin: inputPin,
       phone,
       idType,
       idNumber,
@@ -22,123 +64,135 @@ export async function POST(req: Request) {
       avatar,
     } = body;
 
-    if (!name || !email) {
-      return NextResponse.json({ error: 'Name and email are required' }, { status: 400 });
+    if (!name?.trim()) {
+      return NextResponse.json({ error: 'Staff name is required' }, { status: 400 });
     }
+    if (!email?.trim()) {
+      return NextResponse.json({ error: 'Staff email is required' }, { status: 400 });
+    }
+
+    const password = (inputPassword || 'Staff@123').trim();
+    const pin = (inputPin || '1234').trim();
+    const cleanEmail = email.trim().toLowerCase();
 
     if (password.length < 6) {
       return NextResponse.json({ error: 'Password must be at least 6 characters' }, { status: 400 });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
-
-    // Check if we have a valid service role key
-    const hasServiceRole = Boolean(
-      SUPABASE_SERVICE_ROLE_KEY &&
-      SUPABASE_SERVICE_ROLE_KEY !== SUPABASE_ANON_KEY &&
-      SUPABASE_SERVICE_ROLE_KEY.trim().length > 10
-    );
-
-    const clientKey = hasServiceRole ? SUPABASE_SERVICE_ROLE_KEY : SUPABASE_ANON_KEY;
-    const dbClient = createClient(SUPABASE_URL, clientKey, {
-      auth: { autoRefreshToken: false, persistSession: false }
-    });
-
-    let userId: string = '';
-    let authError: string | null = null;
+    // ── Step 1: Create Auth user ────────────────────────────────────────────
+    let userId = '';
+    let isNewAuthUser = false;
 
     if (hasServiceRole) {
-      // 1A. Service Role Admin User Creation
       const { data: authData, error: createError } = await dbClient.auth.admin.createUser({
         email: cleanEmail,
         password,
         email_confirm: true,
-        user_metadata: { name, role, branch, assignedBranchId, pin }
+        user_metadata: { name, role, branch, assignedBranchId, pin },
       });
 
       if (authData?.user) {
         userId = authData.user.id;
+        isNewAuthUser = true;
       } else if (createError) {
-        if (createError.message.toLowerCase().includes('already registered') ||
-            createError.message.toLowerCase().includes('already been registered')) {
+        const msg = createError.message.toLowerCase();
+        if (msg.includes('already registered') || msg.includes('already been registered')) {
+          // Existing auth user — fetch their ID
           const { data: listData } = await dbClient.auth.admin.listUsers({ perPage: 1000 });
           const existing = listData?.users?.find(u => u.email?.toLowerCase() === cleanEmail);
           if (existing) {
             userId = existing.id;
             await dbClient.auth.admin.updateUserById(userId, {
               password,
-              user_metadata: { name, role, branch, assignedBranchId, pin }
+              user_metadata: { name, role, branch, assignedBranchId, pin },
             });
           }
         } else {
-          authError = createError.message;
+          return NextResponse.json({
+            error: `Auth creation failed: ${createError.message}`,
+            code: createError.status,
+          }, { status: 400 });
         }
       }
     } else {
-      // 1B. Fallback: Anon Client SignUp for Supabase Auth
-      const { data: signUpData, error: signUpError } = await dbClient.auth.signUp({
+      // No service role: signUp with anon client
+      const { data: signUpData, error: signUpErr } = await dbClient.auth.signUp({
         email: cleanEmail,
         password,
-        options: {
-          data: { name, role, branch, assignedBranchId, pin }
-        }
+        options: { data: { name, role, branch, assignedBranchId, pin } },
       });
 
       if (signUpData?.user) {
         userId = signUpData.user.id;
-      } else if (signUpError) {
-        authError = signUpError.message;
+        isNewAuthUser = true;
+      } else if (signUpErr && !signUpErr.message.toLowerCase().includes('already registered')) {
+        console.warn('[CreateStaff] anon signUp warning:', signUpErr.message);
       }
     }
 
-    // Fallback deterministic ID if Auth user wasn't returned immediately
+    // Fallback deterministic ID if no Auth user returned yet
     if (!userId) {
-      userId = `usr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      userId = `staff-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     }
 
-    // 2. Resolve branch FK — check if branch exists in DB
-    let resolvedBranchId: string | null = null;
-    if (assignedBranchId) {
-      const { data: branchRow } = await dbClient
-        .from('branches')
-        .select('id, name')
-        .eq('id', assignedBranchId)
-        .maybeSingle();
-      if (branchRow) {
-        resolvedBranchId = branchRow.id;
-      }
-    }
-
-    // 3. Avatar URL
-    const staffAvatar = avatar ||
+    // ── Step 2: Build the staff record ─────────────────────────────────────
+    const staffAvatar =
+      avatar ||
       `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=f97316&color=fff&bold=true&size=200`;
 
-    // 4. Upsert staff record in public DB (matching public.staff schema: id, name, email, role, branch, status, avatar)
-    const cleanStaffRecord = {
+    const staffRecord = {
       id: userId,
-      name,
+      name: name.trim(),
       email: cleanEmail,
       role,
       branch,
+      assigned_branch_id: assignedBranchId || null,
+      phone: phone?.trim() || null,
+      id_type: idType || null,
+      id_number: idNumber?.trim() || null,
+      pin,
       status: 'active',
       avatar: staffAvatar,
+      created_at: Date.now(),
     };
 
-    let { data: staffData, error: dbError } = await dbClient
+    // ── Step 3: Upsert staff record ─────────────────────────────────────────
+    const { data: staffData, error: dbError } = await dbClient
       .from('staff')
-      .upsert(cleanStaffRecord, { onConflict: 'id' })
-      .select('*')
+      .upsert(staffRecord, { onConflict: 'id' })
+      .select('id, name, email, role, branch, assigned_branch_id, status, avatar, phone, id_type, id_number')
       .single();
 
     if (dbError) {
-      console.warn('[CreateStaff] DB upsert warning:', dbError.message);
+      console.error('[CreateStaff] Database upsert error:', {
+        table: 'staff',
+        errorCode: dbError.code,
+        errorMessage: dbError.message,
+        errorHint: dbError.hint,
+        payload: { id: userId, email: cleanEmail, role },
+        hasServiceRole,
+      });
+      // Roll back auth user if we just created them
+      if (isNewAuthUser && hasServiceRole) {
+        await dbClient.auth.admin.deleteUser(userId).catch(() => {});
+      }
+      return NextResponse.json({
+        error: `Database record creation failed: ${dbError.message}`,
+        code: dbError.code,
+        hint: dbError.hint,
+      }, { status: 500 });
     }
 
-    const finalStaff = staffData || cleanStaffRecord;
+    const finalStaff = staffData || staffRecord;
 
     return NextResponse.json({
       success: true,
-      message: `${name} enrolled in Supabase Auth & Database with role: ${role}`,
+      message: `${name} enrolled successfully as ${role}`,
+      temporaryCredentials: {
+        email: cleanEmail,
+        password,
+        pin,
+      },
       staff: {
         id: finalStaff.id,
         name: finalStaff.name,
@@ -148,14 +202,16 @@ export async function POST(req: Request) {
         assignedBranchId: finalStaff.assigned_branch_id,
         status: finalStaff.status,
         avatar: finalStaff.avatar,
-        pin: finalStaff.pin,
         phone: finalStaff.phone,
         idType: finalStaff.id_type,
         idNumber: finalStaff.id_number,
-      }
+      },
     });
   } catch (err: any) {
-    console.error('[CreateStaff] Server error:', err);
-    return NextResponse.json({ error: err?.message || 'Server error creating staff member' }, { status: 500 });
+    console.error('[CreateStaff] Unexpected server error:', err?.message || err);
+    return NextResponse.json(
+      { error: err?.message || 'Internal server error creating staff member' },
+      { status: 500 }
+    );
   }
 }

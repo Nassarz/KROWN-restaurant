@@ -7,8 +7,8 @@ import { dataStore } from '@/lib/dataStore';
 import { PlaceZone } from '@/lib/mockData';
 import { vibrate } from '@/lib/utils';
 
-export default function AdminZones() {
-  const [zones, setZones] = useState<PlaceZone[]>(() => dataStore.getZones());
+export default function AdminZones({ currentBranchId }: { currentBranchId?: string }) {
+  const [zones, setZones] = useState<PlaceZone[]>(() => dataStore.getZones(currentBranchId));
   const [showAddZone, setShowAddZone] = useState(false);
   const [showAddTableModal, setShowAddTableModal] = useState<string | null>(null);
 
@@ -27,10 +27,10 @@ export default function AdminZones() {
 
   useEffect(() => {
     const unsub = dataStore.subscribe(() => {
-      setZones(dataStore.getZones());
+      setZones(dataStore.getZones(currentBranchId));
     });
     return () => unsub();
-  }, []);
+  }, [currentBranchId]);
 
   const handleCreateZone = (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,11 +46,14 @@ export default function AdminZones() {
       shape: 'round' as const
     }));
 
+    const branchObj = currentBranchId ? dataStore.getBranches().find(b => b.id === currentBranchId) : undefined;
     dataStore.addPlaceZone({
       name: zoneName.trim(),
       icon: zoneIcon || '📍',
       description: zoneDesc.trim() || 'Restaurant seating zone',
-      tables: generatedTables
+      tables: generatedTables,
+      branchId: currentBranchId,
+      branchName: branchObj?.name
     });
 
     setZoneName('');

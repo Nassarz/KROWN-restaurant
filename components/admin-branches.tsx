@@ -3,11 +3,11 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Store, Activity, MapPin, User, Phone, Layers, Plus, Receipt, Mail, X, Trash2 } from 'lucide-react';
-import { formatUGX, MOCK_BRANCHES } from '@/lib/mockData';
+import { formatUGX } from '@/lib/mockData';
 import { dataStore } from '@/lib/dataStore';
 import { vibrate } from '@/lib/utils';
 
-export default function AdminBranches({ restaurants }: { restaurants: any[] }) {
+export default function AdminBranches({ restaurants, selectedBranchId }: { restaurants: any[], selectedBranchId?: string }) {
   const displayBranches = (restaurants || []).filter(r => r.id !== 'all');
   const [showAddModal, setShowAddModal] = useState(false);
 
@@ -72,11 +72,10 @@ export default function AdminBranches({ restaurants }: { restaurants: any[] }) {
           {displayBranches.map(r => {
             const isOnline = dataStore.isBranchOnline(r.id, r.name);
             const allOrders = dataStore.getOrders('all');
-            const branchOrders = allOrders.filter(o =>
-              o.restaurantId === r.id ||
-              o.branchName === r.name ||
-              (o.branchName && r.name && (o.branchName.toLowerCase().includes(r.name.toLowerCase()) || r.name.toLowerCase().includes(o.branchName.toLowerCase())))
-            );
+            const branchOrders = allOrders.filter(o => {
+              if (o.restaurantId && r.id) return o.restaurantId === r.id;
+              return Boolean(o.branchName && r.name && o.branchName.toLowerCase() === r.name.toLowerCase());
+            });
 
             const todayStart = new Date().setHours(0, 0, 0, 0);
             const todayPaidOrders = branchOrders.filter(o =>
@@ -90,7 +89,7 @@ export default function AdminBranches({ restaurants }: { restaurants: any[] }) {
             const displaySales = realTodaySales > 0 ? realTodaySales : (r.dailyRevenueUGX || (branchOrders.length > 0 ? totalBranchSales : 0));
 
             return (
-              <div key={r.id} className="bg-slate-50 dark:bg-black/20 p-6 rounded-3xl border border-black/5 dark:border-white/5 flex flex-col justify-between hover:shadow-xl transition-all">
+              <div key={r.id} className={`bg-slate-50 dark:bg-black/20 p-6 rounded-3xl border border-black/5 dark:border-white/5 flex flex-col justify-between hover:shadow-xl transition-all ${selectedBranchId === r.id ? 'ring-2 ring-orange-500/60 shadow-xl' : ''}`}>
                 <div>
                   <div className="flex items-center justify-between mb-4">
                     <div className="w-12 h-12 bg-gradient-to-br from-orange-500 to-amber-500 flex items-center justify-center rounded-2xl shadow-lg shadow-orange-500/20">

@@ -116,8 +116,17 @@ export async function syncOfflineQueue(): Promise<{ synced: number; failed: numb
         const { error: e } = await supabase.from(op.table).update(updates).eq('id', id);
         error = e;
       } else if (op.method === 'delete') {
-        const { error: e } = await supabase.from(op.table).delete().eq('id', op.payload.id);
-        error = e;
+        if (op.payload?.where) {
+          let query: any = supabase.from(op.table).delete();
+          Object.entries(op.payload.where).forEach(([col, val]) => {
+            query = query.eq(col, val);
+          });
+          const { error: e } = await query;
+          error = e;
+        } else {
+          const { error: e } = await supabase.from(op.table).delete().eq('id', op.payload.id);
+          error = e;
+        }
       }
 
       if (!error) {

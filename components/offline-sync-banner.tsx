@@ -36,6 +36,7 @@ export function OfflineSyncBanner() {
   }, [pendingOps, refresh]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
     setIsOnline(navigator.onLine);
     refresh();
@@ -150,7 +151,7 @@ export function OfflineSyncBanner() {
         <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 5.636a9 9 0 010 12.728M15.536 8.464a5 5 0 010 7.072M4.929 4.929l14.142 14.142M3 3l18 18" />
         </svg>
-        You're offline
+        You&apos;re offline
         {pendingOps > 0 && (
           <span className="ml-1 bg-white/20 rounded-full px-2 py-0.5 text-[10px]">
             {pendingOps} change{pendingOps !== 1 ? 's' : ''} saved locally

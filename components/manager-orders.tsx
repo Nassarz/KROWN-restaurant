@@ -2,7 +2,7 @@ import React from 'react';
 import { Clock } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-import { formatUGX, MOCK_ORDERS } from '@/lib/mockData';
+import { formatUGX } from '@/lib/mockData';
 
 export default function ManagerOrders({ orders }: { orders: any[] }) {
   const [now, setNow] = React.useState(() => Date.now());
@@ -12,7 +12,7 @@ export default function ManagerOrders({ orders }: { orders: any[] }) {
     return () => clearInterval(timer);
   }, []);
 
-  const displayOrders = orders && orders.length > 0 ? orders : MOCK_ORDERS;
+  const displayOrders = orders || [];
   const liveOrders = displayOrders.filter(o => o.status === 'pending' || o.status === 'preparing' || o.status === 'ready');
 
   return (

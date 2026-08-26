@@ -1,10 +1,11 @@
 import { formatUGX } from './mockData';
+import { sendToNetworkPrinter } from './printBridge';
 
 export function generateFormattedThermalReceipt(
   order: any,
   paperWidth: '80mm' | '58mm' = '80mm',
   ticketType: 'receipt' | 'prep' | 'cashier_order' | 'split' = 'receipt',
-  splitData?: { splitIndex: number; totalSplits: number; amount: number; paymentMethod: string; seatCovered?: string }
+  splitData?: { splitIndex: number; totalSplits: number; amount: number; paymentMethod: string; seatCovered?: string; guestLabel?: string; guestItems?: { name: string; price: number; quantity: number; amount: number }[] }
 ): string {
   const lineCharLength = paperWidth === '58mm' ? 32 : 48;
   const divider = '-'.repeat(lineCharLength);
@@ -42,13 +43,13 @@ export function generateFormattedThermalReceipt(
   text += doubleDivider + '\n';
 
   if (ticketType === 'prep') {
-    text += centerText('*** KITCHEN PREP TICKET ***') + '\n';
+    text += centerText('*** KITCHEN ORDER TICKET ***') + '\n';
   } else if (ticketType === 'cashier_order') {
     text += centerText('*** CASHIER ORDER TICKET (UNPAID) ***') + '\n';
   } else if (ticketType === 'split' && splitData) {
     text += centerText(`*** SPLIT RECEIPT (${splitData.splitIndex}/${splitData.totalSplits}) ***`) + '\n';
   } else {
-    text += centerText('*** OFFICIAL TAX PAYMENT RECEIPT ***') + '\n';
+    text += centerText('*** OFFICIAL PAYMENT RECEIPT ***') + '\n';
   }
 
   text += formatLine('ORDER NUMBER:', `#${(order.id || '').toUpperCase()}`) + '\n';
@@ -59,12 +60,20 @@ export function generateFormattedThermalReceipt(
   text += formatLine('DATE / TIME:', dateStr) + '\n';
 
   if (ticketType === 'split' && splitData) {
+    if (splitData.guestLabel) {
+      text += formatLine('GUEST:', splitData.guestLabel) + '\n';
+    }
     text += formatLine('PAYMENT METHOD:', splitData.paymentMethod) + '\n';
     if (splitData.seatCovered) {
       text += formatLine('SPLIT SEAT:', splitData.seatCovered) + '\n';
     }
   } else if (ticketType === 'receipt') {
     text += formatLine('PAYMENT METHOD:', order.paymentMethod || 'Paid') + '\n';
+  }
+
+  // Customer TIN (if provided)
+  if (order.tinNumber && ticketType === 'receipt') {
+    text += formatLine('CUSTOMER TIN:', order.tinNumber) + '\n';
   }
 
   if (order.isCorporateCredit || order.paymentMethod === 'Corporate Credit') {
@@ -87,16 +96,31 @@ export function generateFormattedThermalReceipt(
   }
   text += divider + '\n';
 
-  if (order.items && Array.isArray(order.items)) {
+  if (ticketType === 'split' && splitData?.guestItems && splitData.guestItems.length > 0) {
+    splitData.guestItems.forEach((it: any) => {
+      text += formatLine(`${it.quantity}x ${it.name}`, formatUGX(it.amount)) + '\n';
+    });
+  } else if (order.items && Array.isArray(order.items)) {
     order.items.forEach((item: any) => {
       if (ticketType === 'prep') {
         const itemTitle = `${item.quantity}x ${item.name}`;
-        const noteStr = item.note ? item.note.slice(0, 15) : 'Standard';
+        const noteStr = item.note ? item.note.slice(0, 15) : (item.addOns?.length ? `+${item.addOns.length} add-on${item.addOns.length > 1 ? 's' : ''}` : 'Standard');
         text += formatLine(itemTitle, noteStr) + '\n';
+        if (item.addOns?.length) {
+          item.addOns.forEach((a: any) => {
+            text += formatLine(`   + ${a.name}`, `${formatUGX(a.price)}`) + '\n';
+          });
+        }
       } else {
         const itemTitle = `${item.quantity}x ${item.name}`;
-        const itemPriceStr = formatUGX((item.price || 0) * item.quantity);
+        const addOnsTotal = (item.addOns || []).reduce((s: number, a: any) => s + (a.price * (item.quantity || 1)), 0);
+        const itemPriceStr = formatUGX(((item.price || 0) * item.quantity) + addOnsTotal);
         text += formatLine(itemTitle, itemPriceStr) + '\n';
+        if (item.addOns?.length) {
+          item.addOns.forEach((a: any) => {
+            text += formatLine(`   + ${a.name}`, formatUGX(a.price * (item.quantity || 1))) + '\n';
+          });
+        }
       }
     });
   }
@@ -120,7 +144,7 @@ export function generateFormattedThermalReceipt(
   }
 
   text += formatLine('Subtotal:', formatUGX(subtotal)) + '\n';
-  text += formatLine('URA VAT (18%):', formatUGX(tax)) + '\n';
+  text += formatLine('VAT (18%):', formatUGX(tax)) + '\n';
   text += doubleDivider + '\n';
   if (ticketType === 'cashier_order') {
     text += formatLine('TOTAL DUE AT CASHIER:', formatUGX(total)) + '\n';
@@ -156,6 +180,14 @@ export async function printTicket(
   console.log(`[PRINTER] Printing ${ticketType} ticket for order:`, order.id);
   const formattedText = generateFormattedThermalReceipt(order, paperWidth, ticketType, splitData);
 
+  // Network-first: send silently to the ethernet thermal printer via bridge
+  const kind: 'kitchen' | 'receipt' = ticketType === 'prep' ? 'kitchen' : 'receipt';
+  const sent = await sendToNetworkPrinter(formattedText, kind);
+  if (sent) {
+    console.log(`[PRINTER] Sent ${ticketType} to network printer via bridge.`);
+    return;
+  }
+
   if (typeof window !== 'undefined') {
     const printWindow = window.open('', '_blank', 'width=400,height=600');
     if (printWindow) {
@@ -177,7 +209,7 @@ export async function printTicket(
               }
             </style>
           </head>
-          <body>${formattedText}</body>
+          <body>${formattedText.trimEnd() + '\n'}</body>
         </html>
       `);
       printWindow.document.close();
@@ -195,11 +227,21 @@ export async function printTicket(
   }
 }
 
+/**
+ * Kitchen-only auto-print: called when POS/Waiter places an order.
+ * ONLY prints a Kitchen Order Ticket. NO customer receipt is generated.
+ */
+export async function autoPrintKitchenTicket(order: any) {
+  console.log('[PRINTER] Sending Kitchen Order Ticket for order:', order.id);
+  await printTicket('prep', order, '80mm');
+}
+
+/**
+ * Legacy: Simultaneous multi-printer dispatch.
+ * @deprecated Use autoPrintKitchenTicket for POS orders, printTicket('receipt') for cashier
+ */
 export async function autoPrintOrderTickets(order: any) {
-  // Simultaneous Multi-Printer Network Dispatch:
-  // 1. Kitchen Thermal Printer (Screenless kitchen operation) -> Prep Ticket
-  // 2. Cashier Thermal Printer -> Pre-payment Order Ticket
-  console.log('[PRINTER MULTI-DISPATCH] Dispatching tickets to POS, Kitchen, and Cashier printers for order:', order.id);
+  console.log('[PRINTER MULTI-DISPATCH] Dispatching tickets for order:', order.id);
   await printTicket('prep', order, '80mm');
   await printTicket('cashier_order', order, '80mm');
 }

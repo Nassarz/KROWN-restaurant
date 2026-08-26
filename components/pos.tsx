@@ -4,15 +4,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Home, Grid, UtensilsCrossed, ShoppingCart, Clock, 
-  Settings, Plus, Minus, Search, LogOut, Shield, Sun, Moon, Store, Check, CreditCard, Banknote, Smartphone, DollarSign
+  Settings, Plus, Minus, Search, LogOut, Shield, Sun, Moon, Store, Check, CreditCard, Banknote, Smartphone, DollarSign, Building2, FileText, X
 } from 'lucide-react';
-import { auth } from '@/lib/firebase';
-import { signOut, User } from 'firebase/auth';
+import { supabase } from '@/lib/supabase';
 import { vibrate } from '@/lib/utils';
 import { placeOrderAtomic } from '@/lib/transactions';
 import { useNotification } from '@/hooks/use-notification';
-import { printTicket, autoPrintOrderTickets } from '@/lib/printer';
-import { formatUGX, MOCK_PRODUCTS } from '@/lib/mockData';
+import { autoPrintKitchenTicket } from '@/lib/printer';
+import { formatUGX } from '@/lib/mockData';
 import { dataStore } from '@/lib/dataStore';
 
 const CATEGORIES = [
@@ -27,7 +26,7 @@ const CATEGORIES = [
   { id: 'dessert', name: 'Dessert', icon: '🍰' }
 ];
 
-export default function POSPage({ user, setView, activeStaff }: { user: User; setView: (v: 'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier') => void; activeStaff?: any }) {
+export default function POSPage({ user, setView, activeStaff }: { user: any; setView: (v: 'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier') => void; activeStaff?: any }) {
   const [activeCategory, setActiveCategory] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [cart, setCart] = useState<any[]>([]);
@@ -35,7 +34,14 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
   const mounted = true;
   const [products, setProducts] = useState<any[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [isDark, setIsDark] = useState(false);
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('krown_theme');
+      if (saved) return saved === 'dark';
+      return document.documentElement.classList.contains('dark') || window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    return false;
+  });
   const [viewState, setViewState] = useState<'tables' | 'menu' | 'payment'>('tables');
   const [zones, setZones] = useState<any[]>([]);
   const [activeZoneId, setActiveZoneId] = useState<string>('zone-1');
@@ -44,7 +50,13 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
   const [showSeatModal, setShowSeatModal] = useState<boolean>(false);
   const [selectedTableForModal, setSelectedTableForModal] = useState<any>(null);
 
-  // Corporate Credit Payment State
+  // Ongoing / Draft Orders Modal State
+  const [showOngoingModal, setShowOngoingModal] = useState<boolean>(false);
+  const [ongoingSearch, setOngoingSearch] = useState<string>('');
+  const [allOrdersList, setAllOrdersList] = useState<any[]>([]);
+
+  // Customer TIN & Payment Method State
+  const [tinNumber, setTinNumber] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'MTN Mobile Money' | 'Airtel Money' | 'Credit Card' | 'Corporate Credit'>('MTN Mobile Money');
   const [companies, setCompanies] = useState<any[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
@@ -63,23 +75,28 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
   const isCashier = role === 'Cashier' || isManager;
   const isKitchen = role === 'Head Chef' || role === 'Kitchen Staff' || isManager;
 
-  // Fetch products, zones, companies via DataStore
+  // Fetch products, zones, companies via DataStore (scoped to active staff's branch)
   useEffect(() => {
+    const activeBranchId = activeStaff?.assignedBranchId;
     const sync = () => {
-      setProducts(dataStore.getProducts());
-      const z = dataStore.getZones();
+      setProducts(dataStore.getProducts(activeBranchId));
+      const z = dataStore.getZones(activeBranchId);
       setZones(z);
       setActiveZoneId(prev => prev || (z[0]?.id || ''));
 
-      const c = dataStore.getCompanies();
+      const c = dataStore.getCompanies(activeBranchId);
       setCompanies(c);
       setSelectedCompanyId(prev => prev || (c[0]?.id || ''));
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      const startOfTodayMs = startOfToday.getTime();
+      setAllOrdersList(dataStore.getOrders(activeBranchId, startOfTodayMs));
     };
 
     sync();
     const unsub = dataStore.subscribe(sync);
     return () => unsub();
-  }, []);
+  }, [activeStaff?.assignedBranchId]);
 
   const toggleTheme = () => {
     vibrate(20);
@@ -90,17 +107,42 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
     } else {
       document.documentElement.classList.remove('dark');
     }
+    localStorage.setItem('krown_theme', next ? 'dark' : 'light');
   };
 
-  const addToCart = (product: any) => {
-    vibrate(10);
+  // Add-On selector state
+  const [addOnProduct, setAddOnProduct] = useState<any | null>(null);
+  const [addOnSelections, setAddOnSelections] = useState<Record<string, number>>({});
+  const openAddOnModal = (product: any) => {
+    setAddOnProduct(product);
+    setAddOnSelections({});
+  };
+  const confirmAddOns = (product: any) => {
+    const selectedAddOns = (product.addOns || [])
+      .filter((a: any) => (addOnSelections[a.id] || 0) > 0)
+      .map((a: any) => ({ id: a.id, name: a.name, price: Number(a.priceUGX) || 0, quantity: addOnSelections[a.id] }));
+    appendToCart(product, selectedAddOns);
+    setAddOnProduct(null);
+    setAddOnSelections({});
+  };
+
+  const appendToCart = (product: any, selectedAddOns: { id: string; name: string; price: number; quantity: number }[] = []) => {
     setCart(prev => {
       const existing = prev.find(item => item.id === product.id);
       if (existing) {
         return prev.map(item => item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item);
       }
-      return [...prev, { ...product, quantity: 1 }];
+      return [...prev, { ...product, quantity: 1, addOns: selectedAddOns || [] }];
     });
+  };
+
+  const addToCart = (product: any) => {
+    vibrate(10);
+    if ((product.addOns || []).length > 0) {
+      openAddOnModal(product);
+      return;
+    }
+    appendToCart(product, []);
   };
 
   const updateQuantity = (id: string, delta: number) => {
@@ -115,7 +157,11 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
   };
 
   // Menu prices are VAT INCLUSIVE (18% URA VAT)
-  const grandTotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const itemLineTotal = (item: any) => {
+    const addOnsTotal = (item.addOns || []).reduce((s: number, a: any) => s + (Number(a.price) * (item.quantity || 1)), 0);
+    return (item.price * item.quantity) + addOnsTotal;
+  };
+  const grandTotal = cart.reduce((sum, item) => sum + itemLineTotal(item), 0);
   const tax = Math.round(grandTotal - (grandTotal / 1.18)); // 18% URA VAT included in price
   const subtotal = grandTotal - tax; // Net pre-tax subtotal
   const total = grandTotal; // Total payable (VAT Inclusive)
@@ -125,7 +171,7 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
 
   const [orderType, setOrderType] = useState<'Dine In' | 'Takeaway' | 'Delivery'>('Dine In');
 
-  const submitOrder = (pm: 'Cash' | 'MTN Mobile Money' | 'Airtel Money' | 'Credit Card' | 'Corporate Credit' = paymentMethod) => {
+  const submitOrder = (pm: any = paymentMethod) => {
     if (cart.length === 0) return;
 
     // For Dine In, table is required. For Takeaway/Delivery, auto-assign takeaway counter.
@@ -139,7 +185,7 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
     }
 
     setIsProcessing(true);
-    
+
     try {
       const activeCompanyObj = companies.find(c => c.id === selectedCompanyId);
       const activeStaffObj = availableCompanyStaff.find(s => s.id === selectedStaffId);
@@ -148,6 +194,26 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
         alert(`Account On Hold: ${activeCompanyObj.name} is currently suspended. Corporate credit payment is disabled.`);
         setIsProcessing(false);
         return;
+      }
+
+      // ONE-BILL-PER-TABLE RULE (seat-aware): Append to the SAME bill ONLY when an
+      // open bill already exists in this exact seating scope — the selected seat's
+      // own bill, or a whole-table bill when the whole table is selected.
+      if (orderType === 'Dine In' && finalTable) {
+        const existingOpen = dataStore.getOpenOrderByTable(finalTable, finalSeat);
+        if (existingOpen) {
+          const updated = dataStore.addItemsToOrder(existingOpen.id, cart);
+          if (updated) {
+            autoPrintKitchenTicket(updated);
+            vibrate([50, 100, 50]);
+            setOrderConfirmation({ ...updated, appendedToExisting: true, existingOrderId: existingOpen.id });
+            setCart([]);
+            setTinNumber('');
+            setViewState('tables');
+            setIsProcessing(false);
+            return;
+          }
+        }
       }
 
       const placed = dataStore.placeOrder({
@@ -166,21 +232,26 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
         companyStaffId: pm === 'Corporate Credit' ? selectedStaffId : undefined,
         companyStaffName: pm === 'Corporate Credit' ? activeStaffObj?.name : undefined,
         workId: pm === 'Corporate Credit' ? activeStaffObj?.workId : undefined,
-        restaurantId: 'rest-1',
-        userId: user.uid
+        restaurantId: activeStaff?.assignedBranchId || '',
+        userId: user.uid,
+        tinNumber: tinNumber.trim() || undefined,
       });
       
-      // Auto print thermal tickets for Kitchen & Cashier
-      autoPrintOrderTickets(placed);
+      // KITCHEN ISOLATION RULE: Automatically print ONLY Kitchen Order Ticket (KOT).
+      // NO customer receipt is printed on the POS/waiter side — receipts are printed
+      // by the Cashier or Manager only.
+      autoPrintKitchenTicket(placed);
 
       vibrate([50, 100, 50]);
       setOrderConfirmation(placed);
       setCart([]);
+      setTinNumber('');
       setViewState(orderType === 'Dine In' ? 'tables' : 'menu');
     } catch (e: any) {
       console.warn('Order placed cleanly via dataStore:', e);
       vibrate([50, 100, 50]);
       setCart([]);
+      setTinNumber('');
       setViewState(orderType === 'Dine In' ? 'tables' : 'menu');
     } finally {
       setIsProcessing(false);
@@ -270,6 +341,14 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
             <ShoppingCart className="w-5 h-5 stroke-[2]" />
             <span className="text-[10px] font-medium tracking-wide">Order</span>
           </button>
+
+          <button 
+            onClick={() => { vibrate(20); setShowOngoingModal(true); }}
+            className="flex flex-col items-center justify-center gap-1.5 w-full py-3 rounded-2xl transition-all duration-300 relative group text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/5"
+          >
+            <FileText className="w-5 h-5 stroke-[2]" />
+            <span className="text-[10px] font-medium tracking-wide">Ongoing</span>
+          </button>
           
           {isCashier && (
             <button 
@@ -316,7 +395,7 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
           <button onClick={toggleTheme} className="text-slate-400 hover:text-orange-500 transition-colors p-2">
             {isDark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
           </button>
-          <button onClick={() => { vibrate(40); signOut(auth); }} className="text-slate-400 hover:text-red-500 transition-colors p-2">
+          <button onClick={() => { vibrate(40); supabase.auth.signOut(); }} className="text-slate-400 hover:text-red-500 transition-colors p-2">
             <LogOut className="w-5 h-5" />
           </button>
           <div className="w-12 h-12 rounded-full overflow-hidden ring-2 ring-white dark:ring-white/10 shadow-md bg-slate-200 flex items-center justify-center">
@@ -373,19 +452,24 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
               </div>
 
               {/* Zone / Place Tabs */}
-              <div className="flex gap-3 overflow-x-auto pb-4 custom-scrollbar mb-6">
+              <div className="w-full flex items-center gap-2.5 overflow-x-auto pb-3 pt-1 mb-6 custom-scrollbar shrink-0">
                 {zones.map(z => (
                   <button
                     key={z.id}
                     onClick={() => { vibrate(15); setActiveZoneId(z.id); }}
-                    className={`flex items-center gap-3 px-6 py-3.5 rounded-2xl font-bold text-sm whitespace-nowrap transition-all ${
+                    className={`shrink-0 flex items-center gap-2.5 px-5 py-3 rounded-2xl font-bold text-xs sm:text-sm whitespace-nowrap transition-all duration-200 shadow-sm ${
                       activeZoneId === z.id
-                        ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 shadow-xl'
-                        : 'bg-white dark:bg-[#121214] text-slate-500 border border-black/5 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/5'
+                        ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 shadow-md scale-[1.02]'
+                        : 'bg-white dark:bg-[#121214] text-slate-600 dark:text-slate-300 border border-black/5 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/5'
                     }`}
                   >
-                    <span className="text-xl">{z.icon}</span>
-                    {z.name}
+                    <span className="text-base leading-none">{z.icon || '📍'}</span>
+                    <span className="leading-tight">{z.name}</span>
+                    <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
+                      activeZoneId === z.id ? 'bg-orange-500 text-white' : 'bg-slate-100 dark:bg-white/10 text-slate-500'
+                    }`}>
+                      {z.tables?.length || 0}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -394,6 +478,24 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
                 {currentZone?.tables?.map((t: any) => {
                   const isSelected = activeTable === t.tableNumber;
+                  const occ = dataStore.getTableOccupancy(t.tableNumber);
+                  const isOccupied = occ.status === 'occupied';
+                  const isReserved = occ.status === 'reserved';
+                  const occupiedSeatSet = new Set(occ.openSeats);
+                  const statusColor = isSelected
+                    ? 'bg-gradient-to-br from-orange-500 to-amber-500 text-white border-transparent shadow-orange-500/30'
+                    : isOccupied
+                      ? 'bg-red-50 dark:bg-red-500/10 border-red-400/60 dark:border-red-500/40 text-red-600 dark:text-red-300 hover:border-red-500'
+                      : isReserved
+                        ? 'bg-amber-50 dark:bg-amber-500/10 border-amber-400/60 dark:border-amber-500/40 text-amber-600 dark:text-amber-300 hover:border-amber-500'
+                        : 'bg-white dark:bg-[#121214] border-black/5 dark:border-white/10 text-slate-900 dark:text-white hover:border-orange-500/50';
+                  const tableBodyColor = isSelected
+                    ? 'bg-white/20'
+                    : isOccupied
+                      ? 'bg-gradient-to-br from-red-500 to-rose-700'
+                      : isReserved
+                        ? 'bg-gradient-to-br from-amber-500 to-amber-700'
+                        : 'bg-gradient-to-br from-emerald-500 to-green-700';
                   return (
                     <button 
                       key={t.tableNumber}
@@ -402,29 +504,34 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
                         setSelectedTableForModal(t);
                         setShowSeatModal(true);
                       }}
-                      className={`aspect-square rounded-[2.5rem] flex flex-col items-center justify-center p-4 shadow-xl transition-all active:scale-[0.98] border-2 relative overflow-hidden group ${
-                        isSelected 
-                          ? 'bg-gradient-to-br from-orange-500 to-amber-500 text-white border-transparent shadow-orange-500/30'
-                          : 'bg-white dark:bg-[#121214] border-black/5 dark:border-white/10 text-slate-900 dark:text-white hover:border-orange-500/50'
-                      }`}
+                      className={`aspect-square rounded-[2.5rem] flex flex-col items-center justify-center p-4 shadow-xl transition-all active:scale-[0.98] border-2 relative overflow-hidden group ${statusColor}`}
                     >
                       <div className="relative flex items-center justify-center my-2">
-                        <div className={`w-20 h-20 ${t.shape === 'rectangle' ? 'rounded-2xl' : 'rounded-full'} ${isSelected ? 'bg-white/20' : 'bg-gradient-to-br from-amber-700 to-amber-900 dark:from-slate-800 dark:to-slate-900'} flex flex-col items-center justify-center shadow-lg border-2 border-white/20`}>
+                        <div className={`w-20 h-20 ${t.shape === 'rectangle' ? 'rounded-2xl' : 'rounded-full'} ${tableBodyColor} flex flex-col items-center justify-center shadow-lg border-2 border-white/20`}>
                           <span className="text-2xl font-black">{t.tableNumber}</span>
                           <span className="text-[10px] font-bold opacity-80">{t.seatsCount} Seats</span>
                         </div>
 
-                        {/* Seat Nodes Positioned Around Table */}
+                        {/* Seat Nodes Positioned Around Table — green free / red occupied / amber reserved */}
                         {Array.from({ length: Math.min(8, t.seatsCount || 4) }).map((_, sIdx) => {
+                          const seatName = `Seat ${sIdx + 1}`;
                           const angle = (sIdx / Math.min(8, t.seatsCount || 4)) * (2 * Math.PI);
                           const radius = 46;
                           const x = Math.cos(angle) * radius;
                           const y = Math.sin(angle) * radius;
+                          const seatTaken = occupiedSeatSet.has(seatName);
                           return (
                             <div
                               key={sIdx}
+                              title={seatTaken ? `${seatName} — Occupied` : `${seatName} — Available`}
                               style={{ transform: `translate(${x}px, ${y}px)` }}
-                              className={`absolute w-4 h-4 rounded-full ${isSelected ? 'bg-white text-orange-600' : 'bg-orange-500 text-white'} text-[9px] font-extrabold flex items-center justify-center shadow-sm z-20`}
+                              className={`absolute w-4 h-4 rounded-full ${isSelected
+                                ? 'bg-white text-orange-600'
+                                : seatTaken
+                                  ? 'bg-red-600 text-white ring-2 ring-red-300'
+                                  : isReserved
+                                    ? 'bg-amber-400 text-amber-900'
+                                    : 'bg-emerald-500 text-white'} text-[9px] font-extrabold flex items-center justify-center shadow-sm z-20`}
                             >
                               {sIdx + 1}
                             </div>
@@ -432,8 +539,16 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
                         })}
                       </div>
 
-                      <span className={`text-[10px] font-extrabold px-3 py-0.5 rounded-full mt-1 ${isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 dark:bg-white/10 text-slate-500'}`}>
-                        Select Seat
+                      <span className={`text-[10px] font-extrabold px-3 py-0.5 rounded-full mt-1 ${
+                        isSelected ? 'bg-white/20 text-white'
+                        : isOccupied ? 'bg-red-500 text-white'
+                        : isReserved ? 'bg-amber-500 text-white'
+                        : 'bg-emerald-500/90 text-white'
+                      }`}>
+                        {isSelected ? 'Select Seat'
+                        : isOccupied ? (occ.wholeTableOpen ? `Occupied • Table` : `Occupied • ${occ.openSeats.length} Seat${occ.openSeats.length > 1 ? 's' : ''}`)
+                        : isReserved ? 'Reserved'
+                        : 'Available'}
                       </span>
                     </button>
                   );
@@ -509,7 +624,6 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
                           <div className="flex w-full items-center justify-between mt-2">
                             <div>
                               <p className="text-orange-500 font-bold text-base leading-none">{formatUGX(product.price)}</p>
-                              <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider block mt-0.5">VAT Inclusive</span>
                             </div>
                             <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-white/10 flex items-center justify-center text-slate-500 group-hover:bg-orange-500 group-hover:text-white transition-colors">
                               <Plus className="w-4 h-4" />
@@ -544,14 +658,26 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
                    <p className="text-3xl font-extrabold text-orange-500">{formatUGX(total)}</p>
                  </div>
                  
-                 {/* Payment Method Selector Grid */}
+                 {/* Customer TIN Input (Optional for VAT Invoices) */}
+                 <div className="w-full mb-4">
+                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Customer TIN Number (Optional for VAT Invoice)</label>
+                   <input
+                     type="text"
+                     value={tinNumber}
+                     onChange={e => setTinNumber(e.target.value)}
+                     placeholder="e.g. 1002938491 (Leave empty if none)"
+                     className="w-full bg-slate-50 dark:bg-black/30 border border-black/10 dark:border-white/10 rounded-xl p-3 text-sm text-slate-900 dark:text-white font-mono"
+                   />
+                 </div>
+                 
+                 {/* Payment Method Selector Grid (All 6 Methods) */}
                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 w-full mb-6">
                     {[
                       { id: 'Cash', label: 'Cash', icon: Banknote },
                       { id: 'MTN Mobile Money', label: 'MTN Mobile Money', icon: Smartphone },
                       { id: 'Airtel Money', label: 'Airtel Money', icon: Smartphone },
-                      { id: 'Credit Card', label: 'Credit / Debit Card', icon: CreditCard },
-                      { id: 'Corporate Credit', label: 'Corporate Credit (Bill Company)', icon: Store },
+                      { id: 'Credit Card', label: 'Credit Card', icon: CreditCard },
+                      { id: 'Corporate Credit', label: 'Corporate Credit', icon: Store },
                     ].map(pm => (
                       <button
                         key={pm.id}
@@ -625,15 +751,103 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
         </AnimatePresence>
       </main>
 
+      {/* Add-On Selection Modal */}
+      <AnimatePresence>
+        {addOnProduct && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-white dark:bg-[#121214] rounded-[2.5rem] p-8 max-w-md w-full border border-black/10 dark:border-white/10 shadow-2xl space-y-4">
+              <div className="flex items-center justify-between border-b border-black/5 dark:border-white/5 pb-4">
+                <div>
+                  <h3 className="text-2xl font-bold text-slate-900 dark:text-white">Customize {addOnProduct.name}</h3>
+                  <p className="text-xs text-slate-500 font-medium mt-0.5">Add extras to your meal</p>
+                </div>
+                <button onClick={() => setAddOnProduct(null)} className="p-2 text-slate-400 hover:text-slate-600">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-3 max-h-72 overflow-y-auto custom-scrollbar pr-1">
+                {(addOnProduct.addOns || []).map((a: any) => {
+                  const qty = addOnSelections[a.id] || 0;
+                  return (
+                    <div key={a.id} className={`flex items-center justify-between gap-3 p-4 rounded-2xl border transition-all ${qty > 0 ? 'bg-orange-500/10 border-orange-500/40' : 'bg-slate-50 dark:bg-black/20 border-black/5 dark:border-white/5'}`}>
+                      <div className="flex-1 min-w-0">
+                        <h4 className="font-bold text-sm text-slate-900 dark:text-white truncate">{a.name}</h4>
+                        <p className="text-xs font-bold text-orange-500">{formatUGX(Number(a.priceUGX) || 0)}</p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => setAddOnSelections(prev => ({ ...prev, [a.id]: Math.max(0, qty - 1) }))}
+                          className="w-8 h-8 rounded-xl bg-slate-200 dark:bg-white/10 hover:bg-slate-300 font-black text-slate-700 dark:text-white transition-colors"
+                        >
+                          −
+                        </button>
+                        <span className="w-6 text-center font-black text-sm text-slate-900 dark:text-white">{qty}</span>
+                        <button
+                          onClick={() => setAddOnSelections(prev => ({ ...prev, [a.id]: qty + 1 }))}
+                          className="w-8 h-8 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-black transition-colors shadow-sm"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {(addOnProduct.addOns || []).length === 0 && (
+                  <p className="text-center text-xs text-slate-400 py-8">No add-ons configured for this item yet.</p>
+                )}
+              </div>
+
+              <div className="flex justify-between items-center bg-slate-50 dark:bg-black/30 p-4 rounded-2xl border border-black/5 dark:border-white/5">
+                <span className="text-xs font-bold text-slate-500">Extras Total</span>
+                <span className="font-black text-orange-500">
+                  {formatUGX((addOnProduct.addOns || []).reduce((s: number, a: any) => s + ((addOnSelections[a.id] || 0) * (Number(a.priceUGX) || 0)), 0))}
+                </span>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => { appendToCart(addOnProduct, []); setAddOnProduct(null); setAddOnSelections({}); }}
+                  className="flex-1 py-3.5 rounded-2xl font-bold text-xs bg-slate-100 dark:bg-white/5 dark:text-white text-slate-700 hover:bg-slate-200 transition-all"
+                >
+                  Add Without Extras
+                </button>
+                <button
+                  onClick={() => confirmAddOns(addOnProduct)}
+                  className="flex-1 bg-orange-500 hover:bg-orange-600 text-white py-3.5 rounded-2xl font-bold text-xs shadow-lg shadow-orange-500/20 transition-all active:scale-95"
+                >
+                  Add {addOnProduct.name} ({formatUGX(addOnProduct.price)})
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Seat Selection Modal */}
       <AnimatePresence>
-        {showSeatModal && selectedTableForModal && (
+        {showSeatModal && selectedTableForModal && (() => {
+          const occ = dataStore.getTableOccupancy(selectedTableForModal.tableNumber);
+          const seatSet = new Set(occ.openSeats);
+          const openSeatOrder = (seatName: string) => dataStore.getOpenOrderByTable(selectedTableForModal.tableNumber, seatName);
+          return (
           <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-white dark:bg-[#121214] rounded-[2.5rem] p-8 max-w-md w-full border border-black/10 dark:border-white/10 shadow-2xl space-y-4">
               <h3 className="text-2xl font-bold text-slate-900 dark:text-white">
                 {currentZone?.name} • Table {selectedTableForModal.tableNumber}
               </h3>
-              <p className="text-xs text-slate-500 font-medium">Select specific seat for this customer or entire table</p>
+              <p className="text-xs text-slate-500 font-medium">Pick a seat — occupied seats continue on their existing open bill</p>
+              <div className={`text-xs font-bold px-3 py-2 rounded-xl ${
+                occ.status === 'occupied'
+                  ? 'bg-red-500/10 text-red-600 dark:text-red-300'
+                  : occ.status === 'reserved'
+                    ? 'bg-amber-500/10 text-amber-600 dark:text-amber-300'
+                    : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
+              }`}>
+                {occ.status === 'occupied'
+                  ? `⚠ This table is OCCUPIED${occ.wholeTableOpen ? ' (whole table)' : ` — ${occ.openSeats.length} seat${occ.openSeats.length > 1 ? 's' : ''} taken`}.`
+                  : occ.status === 'reserved' ? '⚠ This table is RESERVED.' : '✓ This table is AVAILABLE.'}
+              </div>
 
               <div className="grid grid-cols-2 gap-2.5 pt-2">
                 <button
@@ -644,31 +858,50 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
                     setShowSeatModal(false);
                     setViewState('menu');
                   }}
-                  className="col-span-2 p-3 bg-orange-500 text-white rounded-xl font-bold text-sm shadow-md text-center"
+                  className={`col-span-2 p-3 rounded-xl font-bold text-sm shadow-md text-center transition-all active:scale-95 ${
+                    occ.wholeTableOpen
+                      ? 'bg-red-500 text-white shadow-red-500/20'
+                      : 'bg-orange-500 text-white shadow-orange-500/20'
+                  }`}
                 >
                   Whole Table ({selectedTableForModal.seatsCount} Seats)
+                  <span className="block text-[10px] font-bold opacity-90 mt-0.5">
+                    {occ.wholeTableOpen ? 'Open bill — new items join it' : 'All seats free'}
+                  </span>
                 </button>
 
-                {Array.from({ length: selectedTableForModal.seatsCount }, (_, i) => `Seat ${i + 1}`).map(seatName => (
-                  <button
-                    key={seatName}
-                    onClick={() => {
-                      vibrate(20);
-                      setActiveTable(selectedTableForModal.tableNumber);
-                      setActiveSeat(seatName);
-                      setShowSeatModal(false);
-                      setViewState('menu');
-                    }}
-                    className="p-3 bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-slate-900 dark:text-white rounded-xl font-bold text-xs text-center border border-black/5 dark:border-white/10"
-                  >
-                    {seatName}
-                  </button>
-                ))}
+                {Array.from({ length: selectedTableForModal.seatsCount }, (_, i) => `Seat ${i + 1}`).map(seatName => {
+                  const taken = seatSet.has(seatName);
+                  const seatOrder = openSeatOrder(seatName);
+                  return (
+                    <button
+                      key={seatName}
+                      onClick={() => {
+                        vibrate(20);
+                        setActiveTable(selectedTableForModal.tableNumber);
+                        setActiveSeat(seatName);
+                        setShowSeatModal(false);
+                        setViewState('menu');
+                      }}
+                      className={`p-3 rounded-xl font-bold text-xs text-center border transition-all active:scale-95 ${
+                        taken
+                          ? 'bg-red-50 dark:bg-red-500/10 border-red-300 dark:border-red-500/40 text-red-600 dark:text-red-300'
+                          : 'bg-emerald-50 dark:bg-green-500/10 border-emerald-300 dark:border-emerald-500/40 text-emerald-700 dark:text-emerald-300'
+                      }`}
+                    >
+                      {seatName}
+                      <span className="block text-[10px] font-bold opacity-90 mt-0.5">
+                        {taken ? `Occupied${seatOrder ? ` • #${seatOrder.id}` : ''}` : 'Available'}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
               <button onClick={() => setShowSeatModal(false)} className="w-full py-2.5 text-xs font-bold text-slate-400 hover:text-slate-600">Cancel</button>
             </motion.div>
           </div>
-        )}
+          );
+        })()}
       </AnimatePresence>
 
       {/* Order Confirmation Modal with Delivery ETA */}
@@ -676,11 +909,18 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
         {orderConfirmation && (
           <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-white dark:bg-[#121214] rounded-[2.5rem] p-8 max-w-md w-full border border-black/10 dark:border-white/10 shadow-2xl space-y-4 text-center">
-              <div className="w-16 h-16 bg-green-500/10 text-green-500 rounded-full flex items-center justify-center mx-auto mb-2">
+              <div className={`w-16 h-16 ${orderConfirmation.appendedToExisting ? 'bg-amber-500/10 text-amber-500' : 'bg-green-500/10 text-green-500'} rounded-full flex items-center justify-center mx-auto mb-2`}>
                 <Check className="w-8 h-8" />
               </div>
-              <h3 className="text-2xl font-bold text-slate-900 dark:text-white">Order Confirmed!</h3>
+              <h3 className="text-2xl font-bold text-slate-900 dark:text-white">
+                {orderConfirmation.appendedToExisting ? 'Items Added to Existing Bill!' : 'Order Confirmed!'}
+              </h3>
               <p className="text-sm font-semibold text-orange-500 font-mono">#{orderConfirmation.id}</p>
+              {orderConfirmation.appendedToExisting && (
+                <p className="bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs font-bold px-3 py-2 rounded-xl">
+                  No duplicate bill — items were added to the same open order on Table {orderConfirmation.table}.
+                </p>
+              )}
 
               <div className="bg-slate-50 dark:bg-black/30 p-4 rounded-2xl border border-black/5 dark:border-white/5 space-y-2 text-left text-xs">
                 <div className="flex justify-between text-slate-500">
@@ -692,8 +932,8 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
                   <span className="font-bold text-orange-500">Sent to Kitchen (Pending Cashier Settlement)</span>
                 </div>
                 <div className="flex justify-between text-slate-500 pt-2 border-t border-black/5 dark:border-white/5">
-                  <span>Estimated Meal Preparation:</span>
-                  <span className="font-bold text-green-500">~{orderConfirmation.prepEstimatedMinutes || 15} Mins</span>
+                  <span>Current Bill Total:</span>
+                  <span className="font-bold text-green-500">{formatUGX(orderConfirmation.total)}</span>
                 </div>
               </div>
 
@@ -758,13 +998,31 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
                   </div>
                   <div className="flex-1 min-w-0">
                     <h4 className="font-bold text-slate-900 dark:text-white truncate">{item.name}</h4>
-                    <p className="text-orange-500 font-bold">{formatUGX(item.price * item.quantity)}</p>
+                    {item.addOns?.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {item.addOns.map((a: any, ai: number) => (
+                          <span key={ai} className="bg-orange-500/10 text-orange-600 dark:text-orange-400 text-[9px] font-extrabold px-1.5 py-0.5 rounded-md">
+                            + {a.name} ({formatUGX(a.price)})
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <p className="text-orange-500 font-bold">{formatUGX(itemLineTotal(item))}</p>
                   </div>
-                  <div className="flex items-center gap-2 bg-white dark:bg-black/40 p-1 rounded-xl border border-black/5 dark:border-white/5">
+                  <div className="flex items-center gap-1 bg-white dark:bg-black/40 p-1 rounded-xl border border-black/5 dark:border-white/5">
                     <button onClick={() => updateQuantity(item.id, -1)} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 active:scale-95 transition-all">
                       <Minus className="w-4 h-4 text-slate-600 dark:text-slate-400" />
                     </button>
-                    <span className="w-4 text-center font-bold text-sm text-slate-900 dark:text-white">{item.quantity}</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={item.quantity}
+                      onChange={(e) => {
+                        const v = Math.max(1, parseInt(e.target.value) || 1);
+                        setCart(prev => prev.map(i => i.id === item.id ? { ...i, quantity: v } : i));
+                      }}
+                      className="w-11 text-center font-bold text-sm text-slate-900 dark:text-white bg-transparent focus:outline-none"
+                    />
                     <button onClick={() => updateQuantity(item.id, 1)} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 active:scale-95 transition-all">
                       <Plus className="w-4 h-4 text-slate-600 dark:text-slate-400" />
                     </button>
@@ -783,15 +1041,11 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
           <div className="p-6 bg-slate-50 dark:bg-black/20 border-t border-black/5 dark:border-white/5 rounded-t-[2rem]">
             <div className="space-y-2.5 mb-6 text-xs font-medium">
               <div className="flex justify-between text-slate-500">
-                <span>Net Subtotal (Excl. VAT)</span>
-                <span className="font-semibold">{formatUGX(subtotal)}</span>
-              </div>
-              <div className="flex justify-between text-slate-500">
-                <span>Includes URA 18% VAT</span>
-                <span className="font-semibold">{formatUGX(tax)}</span>
+                <span>Subtotal ({cart.reduce((a, b) => a + b.quantity, 0)} items)</span>
+                <span className="font-semibold">{formatUGX(total)}</span>
               </div>
               <div className="flex justify-between text-lg font-black text-slate-900 dark:text-white pt-2 border-t border-black/5 dark:border-white/5">
-                <span>Total (VAT Inclusive)</span>
+                <span>Total Amount</span>
                 <span className="text-orange-500">{formatUGX(total)}</span>
               </div>
             </div>
@@ -817,6 +1071,108 @@ export default function POSPage({ user, setView, activeStaff }: { user: User; se
           </div>
         </aside>
       )}
+
+      {/* Ongoing / Draft Orders Modal */}
+      <AnimatePresence>
+        {showOngoingModal && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white dark:bg-[#121214] rounded-[2.5rem] p-8 max-w-2xl w-full border border-black/10 dark:border-white/10 shadow-2xl space-y-4 max-h-[85vh] flex flex-col"
+            >
+              <div className="flex items-center justify-between border-b border-black/5 dark:border-white/5 pb-3">
+                <div>
+                  <h3 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <FileText className="w-6 h-6 text-orange-500" /> Ongoing & Open Orders
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium">Search by Table Number or Order ID to add more food items to open orders</p>
+                </div>
+                <button onClick={() => setShowOngoingModal(false)} className="p-2 text-slate-400 hover:text-slate-600">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Search Bar */}
+              <div className="relative">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search open order by Table (e.g. E11) or Order ID (e.g. ORD-4890)..."
+                  value={ongoingSearch}
+                  onChange={e => setOngoingSearch(e.target.value)}
+                  className="w-full bg-slate-50 dark:bg-black/30 border border-black/10 dark:border-white/10 rounded-xl py-3 pl-11 pr-4 text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              {/* Open Orders List */}
+              <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-1">
+                {allOrdersList
+                  .filter(o => o.paymentStatus !== 'paid' && o.status !== 'completed' && o.status !== 'cancelled')
+                  .filter(o => {
+                    const q = ongoingSearch.trim().toLowerCase();
+                    return !q || o.id.toLowerCase().includes(q) || o.table.toLowerCase().includes(q) || (o.place || '').toLowerCase().includes(q);
+                  })
+                  .map(o => (
+                    <div key={o.id} className="bg-slate-50 dark:bg-black/20 p-4 rounded-2xl border border-black/5 dark:border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:border-orange-500/30 transition-all">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-sm text-slate-900 dark:text-white">#{o.id.toUpperCase()}</span>
+                          <span className="bg-orange-500/10 text-orange-600 dark:text-orange-400 font-extrabold text-[10px] px-2 py-0.5 rounded-full uppercase">
+                            {o.table} • {o.seat || 'Table'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-1 font-medium">
+                          Place: {o.place || 'Dining'} • Items: {o.items?.length || 0} items • Current Total: <span className="font-bold text-orange-500">{formatUGX(o.total)}</span>
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {cart.length > 0 ? (
+                          <button
+                            onClick={() => {
+                              vibrate(30);
+                              const updated = dataStore.addItemsToOrder(o.id, cart);
+                              if (updated) {
+                                autoPrintKitchenTicket(updated);
+                                alert(`Added ${cart.length} items to order #${o.id}! Sent Kitchen Ticket.`);
+                                setCart([]);
+                                setShowOngoingModal(false);
+                              }
+                            }}
+                            className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-md flex items-center gap-1 active:scale-95"
+                          >
+                            <Plus className="w-4 h-4" /> Append Cart ({cart.length} items)
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              vibrate(20);
+                              setActiveTable(o.table);
+                              setActiveSeat(o.seat || 'Whole Table');
+                              setShowOngoingModal(false);
+                              setViewState('menu');
+                            }}
+                            className="bg-slate-900 dark:bg-white text-white dark:text-slate-900 px-4 py-2.5 rounded-xl text-xs font-bold shadow-md flex items-center gap-1 active:scale-95"
+                          >
+                            Open Table {o.table}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+
+                {allOrdersList.filter(o => o.paymentStatus !== 'paid' && o.status !== 'completed' && o.status !== 'cancelled').length === 0 && (
+                  <div className="py-12 text-center text-slate-400 text-xs">
+                    No active ongoing/open orders found.
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

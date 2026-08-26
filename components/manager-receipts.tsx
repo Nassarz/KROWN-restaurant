@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Clock, ChevronRight, Printer, Download, Eye, Receipt, Building2, MapPin, X, CheckCircle2 } from 'lucide-react';
-import { formatUGX, MOCK_ORDERS } from '@/lib/mockData';
+import { formatUGX } from '@/lib/mockData';
 import { printTicket, downloadReceiptFile, generateFormattedThermalReceipt } from '@/lib/printer';
 
 export default function ManagerReceipts({ orders }: { orders: any[] }) {
@@ -10,7 +10,7 @@ export default function ManagerReceipts({ orders }: { orders: any[] }) {
   const [selectedReceipt, setSelectedReceipt] = useState<any | null>(null);
   const [paperWidth, setPaperWidth] = useState<'80mm' | '58mm'>('80mm');
 
-  const displayOrders = orders && orders.length > 0 ? orders : MOCK_ORDERS;
+  const displayOrders = orders || [];
   
   const filtered = displayOrders.filter(o => {
     const matchesSearch = (o.id || '').toLowerCase().includes(search.toLowerCase()) ||

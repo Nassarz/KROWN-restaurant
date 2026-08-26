@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { User } from 'firebase/auth';
 import { 
   ChevronLeft, Users, Store, Activity, Settings, 
   TrendingUp, Box, Shield, Sun, Moon, UtensilsCrossed, Receipt, CreditCard, Banknote, Smartphone, Percent,
-  Calendar, Filter, Plus, DollarSign, FileText, Upload
+  Calendar, Filter, Plus, DollarSign, FileText, Upload, Search, Printer, Download
 } from 'lucide-react';
 import { vibrate } from '@/lib/utils';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
@@ -14,20 +13,20 @@ import ManagerStaff from './manager-staff';
 import AdminBranches from './admin-branches';
 import AdminCompanies from './admin-companies';
 import AdminZones from './admin-zones';
+import GlobalSearchModal from './global-search-modal';
 import { 
   formatUGX, 
-  MOCK_BRANCHES, 
-  MOCK_ORDERS, 
-  MOCK_FINANCIAL_SUMMARY, 
   Branch,
   Expense
 } from '@/lib/mockData';
 import { dataStore } from '@/lib/dataStore';
 import { uploadImageFile } from '@/lib/imageUpload';
-export default function AdminPage({ user, setView }: { user: User, setView: (v: 'pos' | 'admin' | 'manager' | 'kitchen') => void }) {
+
+export default function AdminPage({ user, setView }: { user: any, setView: (v: 'pos' | 'admin' | 'manager' | 'kitchen') => void }) {
   const [activeTab, setActiveTab] = useState<'overview' | 'branches' | 'companies' | 'zones' | 'menu' | 'staff' | 'inventory' | 'finance' | 'audit'>('overview');
   // Persistent Branch Selector State
   const [selectedBranchId, setSelectedBranchId] = useState<string>('all');
+  const [showSearchModal, setShowSearchModal] = useState<boolean>(false);
   
   // Date Filter State
   const [dateFilterMode, setDateFilterMode] = useState<'all' | 'today' | '7days' | '30days' | 'custom'>('all');
@@ -53,6 +52,8 @@ export default function AdminPage({ user, setView }: { user: User, setView: (v: 
 
   const [isDark, setIsDark] = useState(() => {
     if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('krown_theme');
+      if (saved) return saved === 'dark';
       return document.documentElement.classList.contains('dark') || window.matchMedia('(prefers-color-scheme: dark)').matches;
     }
     return false;
@@ -67,6 +68,7 @@ export default function AdminPage({ user, setView }: { user: User, setView: (v: 
     } else {
       document.documentElement.classList.remove('dark');
     }
+    localStorage.setItem('krown_theme', next ? 'dark' : 'light');
   };
 
   // Sync data whenever store updates or selectedBranchId/dateFilter changes
@@ -107,6 +109,11 @@ export default function AdminPage({ user, setView }: { user: User, setView: (v: 
   const displayOrders = orders;
 
   // Financial Calculations
+  const todayStart = new Date().setHours(0, 0, 0, 0);
+  const todaySales = displayOrders
+    .filter(o => o.createdAt >= todayStart && (o.paymentStatus === 'paid' || o.status === 'completed'))
+    .reduce((sum, o) => sum + (o.total || 0), 0);
+
   const grossSales = displayOrders
     .filter(o => o.paymentStatus === 'paid' || o.status === 'completed')
     .reduce((sum, o) => sum + (o.total || 0), 0);
@@ -232,19 +239,28 @@ export default function AdminPage({ user, setView }: { user: User, setView: (v: 
       <main className="flex-1 min-w-0 flex flex-col h-[calc(100vh-5rem)]">
         {/* Top Header Controls: Persistent Branch Selector & Date Filter */}
         <header className="bg-white/80 dark:bg-[#121214]/80 backdrop-blur-2xl border border-white/40 dark:border-white/5 p-4 rounded-2xl mb-6 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
-          <div className="flex items-center gap-3 w-full sm:w-auto">
-            <Filter className="w-4 h-4 text-orange-500 shrink-0" />
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider shrink-0">Selected Branch:</span>
-            <select
-              value={selectedBranchId}
-              onChange={(e) => setSelectedBranchId(e.target.value)}
-              className="bg-slate-100 dark:bg-black/40 border border-black/10 dark:border-white/10 text-slate-900 dark:text-white text-xs font-bold py-2 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500/50 transition-all cursor-pointer flex-1 sm:flex-initial"
+          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+            <button
+              onClick={() => setShowSearchModal(true)}
+              className="bg-slate-100 dark:bg-black/40 border border-black/10 dark:border-white/10 px-3 py-2 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2 hover:bg-slate-200 transition-all"
             >
-              <option value="all">🏢 All Branches Combined (Global HQ)</option>
-              {displayBranches.map(b => (
-                <option key={b.id} value={b.id}>📍 {b.name} ({b.city})</option>
-              ))}
-            </select>
+              <Search className="w-4 h-4 text-orange-500" /> Global Search...
+            </button>
+
+            <div className="flex items-center gap-2">
+              <Filter className="w-4 h-4 text-orange-500 shrink-0" />
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider shrink-0">Selected Branch:</span>
+              <select
+                value={selectedBranchId}
+                onChange={(e) => setSelectedBranchId(e.target.value)}
+                className="bg-slate-100 dark:bg-black/40 border border-black/10 dark:border-white/10 text-slate-900 dark:text-white text-xs font-bold py-2 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500/50 transition-all cursor-pointer flex-1 sm:flex-initial"
+              >
+                <option value="all">🏢 All Branches Combined (Global HQ)</option>
+                {displayBranches.map(b => (
+                  <option key={b.id} value={b.id}>📍 {b.name} ({b.city})</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto justify-end">
@@ -291,13 +307,22 @@ export default function AdminPage({ user, setView }: { user: User, setView: (v: 
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+                <div className="bg-gradient-to-br from-emerald-500 to-teal-600 shadow-2xl shadow-emerald-500/20 rounded-[2rem] p-5 text-white relative overflow-hidden">
+                  <div className="flex items-center gap-2 text-white/80 mb-2">
+                    <DollarSign className="w-4 h-4" />
+                    <span className="font-semibold text-xs uppercase tracking-wider">Today Sales</span>
+                  </div>
+                  <h3 className="text-xl font-extrabold">{formatUGX(todaySales)}</h3>
+                  <p className="text-[10px] text-white/80 mt-1 font-medium">Sales since 12 AM Midnight</p>
+                </div>
+
                 <div className="bg-gradient-to-br from-orange-500 to-amber-500 shadow-2xl shadow-orange-500/20 rounded-[2rem] p-5 text-white relative overflow-hidden">
                   <div className="flex items-center gap-2 text-white/80 mb-2">
                     <TrendingUp className="w-4 h-4" />
                     <span className="font-semibold text-xs uppercase tracking-wider">Gross Sales</span>
                   </div>
                   <h3 className="text-xl font-extrabold">{formatUGX(grossSales)}</h3>
-                  <p className="text-[10px] text-white/80 mt-1 font-medium">VAT Inclusive Revenue</p>
+                  <p className="text-[10px] text-white/80 mt-1 font-medium">Total Revenue</p>
                 </div>
 
                 <div className="bg-white/80 dark:bg-[#121214]/80 backdrop-blur-2xl border border-white/40 dark:border-white/5 shadow-2xl rounded-[2rem] p-5 ring-1 ring-black/5 dark:ring-white/10">
@@ -312,10 +337,10 @@ export default function AdminPage({ user, setView }: { user: User, setView: (v: 
                 <div className="bg-white/80 dark:bg-[#121214]/80 backdrop-blur-2xl border border-white/40 dark:border-white/5 shadow-2xl rounded-[2rem] p-5 ring-1 ring-black/5 dark:ring-white/10">
                   <div className="flex items-center gap-2 text-slate-500 mb-2">
                     <Percent className="w-4 h-4 text-orange-500" />
-                    <span className="font-semibold text-xs uppercase tracking-wider">URA VAT (18%)</span>
+                    <span className="font-semibold text-xs uppercase tracking-wider">Tax Reserve</span>
                   </div>
                   <h3 className="text-xl font-bold text-slate-900 dark:text-white">{formatUGX(netURAPayable)}</h3>
-                  <p className="text-[10px] text-slate-400 font-medium mt-1">Output minus Input VAT</p>
+                  <p className="text-[10px] text-slate-400 font-medium mt-1">Calculated reserve</p>
                 </div>
 
                 <div className="bg-white/80 dark:bg-[#121214]/80 backdrop-blur-2xl border border-white/40 dark:border-white/5 shadow-2xl rounded-[2rem] p-5 ring-1 ring-black/5 dark:ring-white/10">
@@ -368,8 +393,8 @@ export default function AdminPage({ user, setView }: { user: User, setView: (v: 
             <motion.div key="finance" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="flex flex-col h-full gap-6 overflow-y-auto custom-scrollbar pr-2 flex-1">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
-                  <h2 className="text-3xl font-bold text-slate-900 dark:text-white tracking-tight">Financial & URA Tax Analytics</h2>
-                  <p className="text-slate-500 font-medium text-xs">P&L ledger, branch operating expenses, and EFRIS 18% VAT calculations.</p>
+                  <h2 className="text-3xl font-bold text-slate-900 dark:text-white tracking-tight">Financial & Revenue Analytics</h2>
+                  <p className="text-slate-500 font-medium text-xs">P&L ledger, branch operating expenses, and revenue reports.</p>
                 </div>
                 <button
                   onClick={() => setShowAddExpense(true)}
@@ -394,9 +419,9 @@ export default function AdminPage({ user, setView }: { user: User, setView: (v: 
                 </div>
 
                 <div className="bg-white/80 dark:bg-[#121214]/80 backdrop-blur-2xl p-6 rounded-[2rem] border border-black/5 dark:border-white/5 shadow-xl">
-                  <span className="text-xs font-bold uppercase text-slate-400">Net URA VAT Payable</span>
+                  <span className="text-xs font-bold uppercase text-slate-400">Net Tax Reserve</span>
                   <h3 className="text-2xl font-bold text-orange-500 mt-2">{formatUGX(netURAPayable)}</h3>
-                  <p className="text-[11px] text-slate-500 mt-1">Output VAT ({formatUGX(outputVAT)}) - Input VAT ({formatUGX(inputVAT)})</p>
+                  <p className="text-[11px] text-slate-500 mt-1">Calculated tax reserve ({formatUGX(netURAPayable)})</p>
                 </div>
 
                 <div className="bg-white/80 dark:bg-[#121214]/80 backdrop-blur-2xl p-6 rounded-[2rem] border border-black/5 dark:border-white/5 shadow-xl">
@@ -420,7 +445,7 @@ export default function AdminPage({ user, setView }: { user: User, setView: (v: 
                         <th className="py-3 px-4">Category</th>
                         <th className="py-3 px-4">Branch</th>
                         <th className="py-3 px-4 text-right">Amount (UGX)</th>
-                        <th className="py-3 px-4 text-right">Input VAT (18%)</th>
+                        <th className="py-3 px-4 text-right">Tax Amount</th>
                         <th className="py-3 px-4 text-right">Receipt</th>
                       </tr>
                     </thead>
@@ -484,25 +509,25 @@ export default function AdminPage({ user, setView }: { user: User, setView: (v: 
           {/* 4. OTHER SUB-COMPONENTS */}
           {activeTab === 'branches' && (
             <motion.div key="branches" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full flex-1">
-              <AdminBranches restaurants={displayBranches} />
+              <AdminBranches restaurants={displayBranches} selectedBranchId={selectedBranchId} />
             </motion.div>
           )}
 
           {activeTab === 'companies' && (
             <motion.div key="companies" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full flex-1">
-              <AdminCompanies />
+              <AdminCompanies currentBranchId={selectedBranchId === 'all' ? undefined : selectedBranchId} />
             </motion.div>
           )}
 
           {activeTab === 'zones' && (
             <motion.div key="zones" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full flex-1">
-              <AdminZones />
+              <AdminZones currentBranchId={selectedBranchId === 'all' ? undefined : selectedBranchId} />
             </motion.div>
           )}
 
           {activeTab === 'menu' && (
             <motion.div key="menu" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full flex-1">
-              <ManagerMenu products={products} user={user} />
+              <ManagerMenu products={products} user={user} branchId={selectedBranchId === 'all' ? undefined : selectedBranchId} />
             </motion.div>
           )}
 
@@ -514,7 +539,7 @@ export default function AdminPage({ user, setView }: { user: User, setView: (v: 
 
           {activeTab === 'inventory' && (
             <motion.div key="inventory" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full flex-1">
-              <ManagerInventory ingredients={ingredients} user={user} />
+              <ManagerInventory ingredients={ingredients} user={user} branchId={selectedBranchId === 'all' ? undefined : selectedBranchId} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -572,6 +597,9 @@ export default function AdminPage({ user, setView }: { user: User, setView: (v: 
           </div>
         )}
       </AnimatePresence>
+
+      {/* Global Search Modal */}
+      <GlobalSearchModal isOpen={showSearchModal} onClose={() => setShowSearchModal(false)} />
     </div>
   );
 }
