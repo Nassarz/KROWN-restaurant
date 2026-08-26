@@ -12,7 +12,23 @@ import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const HTTP_PORT = parseInt(process.argv[2] === '--port' ? process.argv[3] : '9101', 10);
+// Parse command line arguments
+const args = {};
+for (let i = 2; i < process.argv.length; i++) {
+  const arg = process.argv[i];
+  if (arg.startsWith('--')) {
+    const key = arg.slice(2);
+    const val = process.argv[i + 1];
+    if (val && !val.startsWith('--')) {
+      args[key] = val;
+      i++;
+    } else {
+      args[key] = true;
+    }
+  }
+}
+
+const HTTP_PORT = parseInt(args.port || '9101', 10);
 
 // In-memory print job queue for HTTP client requests
 const jobs = [];
@@ -21,7 +37,7 @@ const jobs = [];
 function loadEnv() {
   const envPath = path.resolve(process.cwd(), '.env.local');
   if (!fs.existsSync(envPath)) {
-    console.warn('[PRINT_AGENT] Warning: .env.local not found. Running in standalone HTTP mode.');
+    console.warn('[PRINT_AGENT] Warning: .env.local not found. Running in standalone mode.');
     return {};
   }
   const config = {};
@@ -47,15 +63,16 @@ function loadEnv() {
 }
 
 const env = loadEnv();
-const KITCHEN_PRINTER_IP = env.KITCHEN_PRINTER_IP || '192.168.1.100';
-const KITCHEN_PRINTER_PORT = parseInt(env.KITCHEN_PRINTER_PORT || '9100', 10);
-const RECEIPT_PRINTER_IP = env.RECEIPT_PRINTER_IP || '192.168.1.101';
-const RECEIPT_PRINTER_PORT = parseInt(env.RECEIPT_PRINTER_PORT || '9100', 10);
+const supabaseUrl = args.url || env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseKey = args.key || env.SUPABASE_SERVICE_ROLE_KEY;
+
+const KITCHEN_PRINTER_IP = args['kitchen-ip'] || env.KITCHEN_PRINTER_IP || '192.168.1.100';
+const KITCHEN_PRINTER_PORT = parseInt(args['kitchen-port'] || env.KITCHEN_PRINTER_PORT || '9100', 10);
+const RECEIPT_PRINTER_IP = args['receipt-ip'] || env.RECEIPT_PRINTER_IP || '192.168.1.101';
+const RECEIPT_PRINTER_PORT = parseInt(args['receipt-port'] || env.RECEIPT_PRINTER_PORT || '9100', 10);
 
 // ── SUPABASE CLIENT INITIALIZATION ──────────────────────────────────────────
 let supabase = null;
-const supabaseUrl = env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (supabaseUrl && supabaseKey) {
   try {
@@ -68,7 +85,8 @@ if (supabaseUrl && supabaseKey) {
     console.error('[PRINT_AGENT] Failed to load @supabase/supabase-js library:', err.message);
   }
 } else {
-  console.warn('[PRINT_AGENT] NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing in .env.local. Supabase sync disabled.');
+  console.warn('[PRINT_AGENT] NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing. Supabase sync disabled.');
+  console.warn('[PRINT_AGENT] Tip: You can pass them as flags: node tools/krown-print-bridge.mjs --url <URL> --key <SERVICE_KEY>');
 }
 
 // ── ADVANCED ESC/POS COMPILER ────────────────────────────────────────────────
