@@ -173,8 +173,12 @@ export default function AppRouter() {
       return;
     }
 
-    if (role === 'Cashier' && (targetView === 'admin' || targetView === 'manager')) {
-      alert('Access Denied (RLS Security Guard): Cashier accounts cannot access Manager or Admin dashboards.');
+    if (role === 'Cashier') {
+      if (targetView === 'admin' || targetView === 'manager') {
+        alert('Access Denied (RLS Security Guard): Cashier accounts cannot access Manager or Admin dashboards.');
+        return;
+      }
+      setView(targetView);
       return;
     }
 

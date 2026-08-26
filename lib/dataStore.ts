@@ -1,6 +1,6 @@
 import {
   Product, Ingredient, Order, Branch, StaffMember, AuditLog,
-  CompanyProfile, CompanyStaff, PlaceZone, Expense, InventoryMovement, ProductIngredient, ProductAddOn
+  CompanyProfile, CompanyStaff, PlaceZone, Expense, InventoryMovement, ProductIngredient, ProductAddOn, PrintJob
 } from './mockData';
 import { supabase } from './supabase';
 import { queueOfflineOp, initAutoSync } from './sync';
@@ -58,6 +58,38 @@ async function safeWrite(
 }
 
 
+function toDbPrintJob(pj: PrintJob): any {
+  return {
+    id: pj.id,
+    order_id: pj.orderId,
+    type: pj.type,
+    destination: pj.destination,
+    printer_id: pj.printerId ?? null,
+    payload: pj.payload,
+    status: pj.status,
+    attempts: pj.attempts,
+    created_at: pj.createdAt,
+    last_error: pj.lastError ?? null,
+    printed_at: pj.printedAt ?? null
+  };
+}
+
+function fromDbPrintJob(r: any): PrintJob {
+  return {
+    id: r.id,
+    orderId: r.order_id,
+    type: r.type,
+    destination: r.destination,
+    printerId: r.printer_id,
+    payload: r.payload,
+    status: r.status,
+    attempts: r.attempts ?? 0,
+    createdAt: r.created_at ? Number(r.created_at) : Date.now(),
+    lastError: r.last_error,
+    printedAt: r.printed_at ? Number(r.printed_at) : null
+  };
+}
+
 // ─── DB Mapping Helpers ──────────────────────────────────────────────────────
 function toDbOrder(o: Order): any {
   let createdNum: number;
@@ -98,6 +130,8 @@ function toDbOrder(o: Order): any {
     created_at: createdNum,
     tin_number: o.tinNumber ?? null,
     notes: o.notes ?? null,
+    amount_received: o.amountReceived ?? null,
+    change_amount: o.change ?? null,
   };
 }
 
@@ -128,6 +162,8 @@ function fromDbOrder(r: any): Order {
     companyStaffName: r.company_staff_name,
     workId: r.work_id,
     prepEstimatedMinutes: r.prep_estimated_minutes,
+    amountReceived: r.amount_received ? Number(r.amount_received) : undefined,
+    change: r.change_amount ? Number(r.change_amount) : undefined,
     prepStartedAt: r.prep_started_at ? (typeof r.prep_started_at === 'string' ? new Date(r.prep_started_at).getTime() : Number(r.prep_started_at)) : undefined,
     restaurantId: r.restaurant_id,
     branchName: r.branch_name,
@@ -468,6 +504,7 @@ class DataStoreEngine {
   private listeners: Set<Listener> = new Set();
   private seeded = false;
   private customCategories: string[] = [];
+  private printJobs: PrintJob[] = [];
   private onlineStaffPresence: Array<{ staffId: string; email?: string; branch?: string; assignedBranchId?: string }> = [];
 
   constructor() {
@@ -505,6 +542,8 @@ class DataStoreEngine {
         if (sProds) this.products = JSON.parse(sProds);
         const sCats = localStorage.getItem('krown_categories');
         if (sCats) this.customCategories = JSON.parse(sCats);
+        const sJobs = localStorage.getItem('krown_print_jobs');
+        if (sJobs) this.printJobs = JSON.parse(sJobs);
       } catch (e) {
         console.warn('[DataStore] loadLocal parse warning:', e);
       }
@@ -531,6 +570,7 @@ class DataStoreEngine {
         { data: expenses },
         { data: movements },
         { data: prodIngs },
+        { data: printJobs },
       ] = await Promise.all([
         supabase.from('products').select('*'),
         supabase.from('ingredients').select('*'),
@@ -546,6 +586,8 @@ class DataStoreEngine {
           .then(r => { if (r.error) { console.warn('[DataStore] inventory_movements not ready:', r.error.message); return { data: [] }; } return r; }),
         supabase.from('product_ingredients').select('*')
           .then(r => { if (r.error) { console.warn('[DataStore] product_ingredients not ready:', r.error.message); return { data: [] }; } return r; }),
+        supabase.from('print_jobs').select('*').order('created_at', { ascending: false }).limit(100)
+          .then(r => { if (r.error) { console.warn('[DataStore] print_jobs not ready:', r.error.message); return { data: [] }; } return r; }),
       ]);
 
       if (products) {
@@ -607,6 +649,10 @@ class DataStoreEngine {
         this.expenses = expenses.map(fromDbExpense);
       }
 
+      if (printJobs) {
+        this.printJobs = printJobs.map(fromDbPrintJob);
+      }
+
       this.persistLocal();
     } catch (e) {
       console.warn('[Supabase] fetchAll error:', e);
@@ -626,6 +672,7 @@ class DataStoreEngine {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'staff' }, (p) => this.handleRealtime('staff', p))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, (p) => this.handleRealtime('expenses', p))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'audit_logs' }, (p) => this.handleRealtime('audit_logs', p))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'print_jobs' }, (p) => this.handleRealtime('print_jobs', p))
       .subscribe();
   }
 
@@ -672,6 +719,9 @@ class DataStoreEngine {
       case 'audit_logs':
         this.auditLogs = apply(this.auditLogs, r => (r as AuditLog));
         break;
+      case 'print_jobs':
+        this.printJobs = apply(this.printJobs, fromDbPrintJob).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        break;
     }
     this.persistLocal();
   }
@@ -690,6 +740,7 @@ class DataStoreEngine {
       localStorage.setItem('krown_zones',       JSON.stringify(this.zones));
       localStorage.setItem('krown_expenses',    JSON.stringify(this.expenses));
       localStorage.setItem('krown_categories',  JSON.stringify(this.customCategories));
+      localStorage.setItem('krown_print_jobs',  JSON.stringify(this.printJobs));
     } catch { /* ignore */ }
     this.notify();
   }
@@ -819,6 +870,49 @@ class DataStoreEngine {
   }
 
   public getBranches(): Branch[] { return this.branches; }
+
+  public getPrintJobs(orderId?: string): PrintJob[] {
+    if (orderId) {
+      return this.printJobs.filter(pj => pj.orderId === orderId);
+    }
+    return this.printJobs;
+  }
+
+  public addPrintJob(pj: Omit<PrintJob, 'attempts' | 'createdAt' | 'printedAt' | 'lastError'>): PrintJob {
+    const newJob: PrintJob = {
+      ...pj,
+      attempts: 0,
+      createdAt: Date.now(),
+      printedAt: null,
+      lastError: null
+    };
+    this.printJobs = [newJob, ...this.printJobs];
+    safeWrite('print_jobs', 'insert', toDbPrintJob(newJob));
+    this.persistLocal();
+    return newJob;
+  }
+
+  public updatePrintJobStatus(id: string, status: PrintJob['status'], details?: { attempts?: number; lastError?: string | null; printedAt?: number | null }) {
+    let updatedJob: PrintJob | null = null;
+    this.printJobs = this.printJobs.map(pj => {
+      if (pj.id === id) {
+        const u = {
+          ...pj,
+          status,
+          attempts: details?.attempts !== undefined ? details.attempts : pj.attempts,
+          lastError: details?.lastError !== undefined ? details.lastError : pj.lastError,
+          printedAt: details?.printedAt !== undefined ? details.printedAt : pj.printedAt
+        };
+        updatedJob = u;
+        return u;
+      }
+      return pj;
+    });
+    if (updatedJob) {
+      safeWrite('print_jobs', 'upsert', toDbPrintJob(updatedJob));
+    }
+    this.persistLocal();
+  }
 
   public getCustomCategories(): string[] {
     return this.customCategories;
@@ -1173,6 +1267,8 @@ class DataStoreEngine {
     companyStaffName?: string;
     workId?: string;
     tinNumber?: string;
+    amountReceived?: number;
+    change?: number;
   }): Order | null {
     let targetOrder: Order | null = null;
     this.orders = this.orders.map(o => {
@@ -1187,6 +1283,8 @@ class DataStoreEngine {
           companyStaffName: paymentData.companyStaffName ?? o.companyStaffName,
           workId: paymentData.workId ?? o.workId,
           tinNumber: paymentData.tinNumber ?? o.tinNumber,
+          amountReceived: paymentData.amountReceived ?? o.amountReceived,
+          change: paymentData.change ?? o.change,
           paymentStatus: 'paid',
           paidAmount: o.total,
           status: o.status === 'pending' ? 'preparing' : o.status

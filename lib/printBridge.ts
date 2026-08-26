@@ -1,8 +1,8 @@
 // Network Thermal Printer Bridge
 // Sends ESC/POS text to a local print bridge (tools/krown-print-bridge.mjs) which
-// opens a raw TCP socket to the ethernet thermal printer (IP:9100). This is what
-// allows the kitchen printer to print automatically over ethernet while the
-// POS computer stays connected via cable to the router/switch.
+// opens a raw TCP socket to the ethernet thermal printer (IP:9100).
+
+import { dataStore } from './dataStore';
 
 export interface PrinterBridgeConfig {
   enabled: boolean;
@@ -44,35 +44,125 @@ export function setPrinterConfig(cfg: Partial<PrinterBridgeConfig>) {
   return merged;
 }
 
+async function pollJobStatus(jobId: string) {
+  const cfg = getPrinterConfig();
+  try {
+    const res = await fetch(`http://${cfg.bridgeHost}:${cfg.bridgePort}/jobs`);
+    if (!res.ok) return;
+    const jobsList = await res.json();
+    const job = jobsList.find((j: any) => j.id === jobId);
+    if (job) {
+      if (job.status === 'PRINTED') {
+        dataStore.updatePrintJobStatus(jobId, 'PRINTED', { printedAt: job.printedAt || Date.now(), attempts: job.attempts });
+      } else if (job.status === 'FAILED') {
+        dataStore.updatePrintJobStatus(jobId, 'FAILED', { lastError: job.lastError, attempts: job.attempts });
+      } else if (job.status === 'PRINTING' || job.status === 'QUEUED') {
+        setTimeout(() => pollJobStatus(jobId), 1500);
+      }
+    }
+  } catch (err) {
+    console.warn('[PrintBridge] Error polling job status:', err);
+  }
+}
+
 /**
  * Send plain text (already formatted as a thermal ticket) to a network printer
- * via the local bridge. Returns true when the bridge accepted it.
+ * via the local bridge. Registers job in local database/store first.
  */
-export async function sendToNetworkPrinter(text: string, kind: 'kitchen' | 'receipt'): Promise<boolean> {
+export async function sendToNetworkPrinter(
+  text: string,
+  kind: 'kitchen' | 'receipt',
+  jobId: string,
+  orderId: string,
+  type: 'KITCHEN_TICKET' | 'BILL' | 'CUSTOMER_RECEIPT'
+): Promise<boolean> {
   const cfg = getPrinterConfig();
-  if (!cfg.enabled) return false;
+  if (!cfg.enabled) {
+    dataStore.updatePrintJobStatus(jobId, 'FAILED', { lastError: 'Network printer bridge is disabled in POS Settings.' });
+    return false;
+  }
 
-  const targetIp = kind === 'kitchen' ? cfg.kitchenIp : cfg.receiptIp;
-  const targetPort = kind === 'kitchen' ? cfg.kitchenPort : cfg.receiptPort;
+  const targetIp = kind === 'kitchen' ? cfg.kitchenIp : (cfg.receiptIp || cfg.kitchenIp);
+  const targetPort = Number(kind === 'kitchen' ? cfg.kitchenPort : (cfg.receiptPort || cfg.kitchenPort || 9100));
 
   try {
+    dataStore.updatePrintJobStatus(jobId, 'PRINTING');
     const res = await fetch(`http://${cfg.bridgeHost}:${cfg.bridgePort}/print`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, ip: targetIp, port: targetPort, paperWidth: cfg.paperWidth }),
+      body: JSON.stringify({
+        id: jobId,
+        orderId,
+        type,
+        text,
+        ip: targetIp,
+        port: targetPort
+      }),
     });
-    if (!res.ok) return false;
+    if (!res.ok) {
+      const errText = await res.text().catch(() => 'Print bridge network failure');
+      dataStore.updatePrintJobStatus(jobId, 'FAILED', { lastError: errText });
+      return false;
+    }
     const body = await res.json().catch(() => null);
-    return body?.ok === true;
-  } catch (e) {
+    if (body?.ok === true) {
+      if (body.status === 'PRINTED') {
+        dataStore.updatePrintJobStatus(jobId, 'PRINTED', { printedAt: Date.now(), attempts: 1 });
+      } else {
+        dataStore.updatePrintJobStatus(jobId, 'PRINTING', { attempts: 1 });
+        setTimeout(() => pollJobStatus(jobId), 1000);
+      }
+      return true;
+    } else {
+      dataStore.updatePrintJobStatus(jobId, 'FAILED', { lastError: body?.error || 'Bridge rejected print job' });
+      return false;
+    }
+  } catch (e: any) {
     console.warn('[PrintBridge] Bridge unreachable:', e);
+    dataStore.updatePrintJobStatus(jobId, 'FAILED', { lastError: e.message || 'Bridge unreachable' });
+    return false;
+  }
+}
+
+export async function retryNetworkPrintJob(jobId: string): Promise<boolean> {
+  const cfg = getPrinterConfig();
+  try {
+    dataStore.updatePrintJobStatus(jobId, 'PRINTING');
+    const res = await fetch(`http://${cfg.bridgeHost}:${cfg.bridgePort}/print/retry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: jobId }),
+    });
+    if (!res.ok) {
+      dataStore.updatePrintJobStatus(jobId, 'FAILED', { lastError: 'Retry post failed' });
+      return false;
+    }
+    const body = await res.json().catch(() => null);
+    if (body?.ok) {
+      setTimeout(() => pollJobStatus(jobId), 1000);
+      return true;
+    }
+    return false;
+  } catch (e: any) {
+    dataStore.updatePrintJobStatus(jobId, 'FAILED', { lastError: e.message || 'Retry request unreachable' });
     return false;
   }
 }
 
 export async function testNetworkPrinter(kind: 'kitchen' | 'receipt'): Promise<boolean> {
-  return sendToNetworkPrinter(
-    'KROWN ENTERPRISE POS\n\nPRINTER TEST OK\n' + new Date().toLocaleString() + '\n\n\n',
-    kind
-  );
+  const cfg = getPrinterConfig();
+  const targetIp = kind === 'kitchen' ? cfg.kitchenIp : (cfg.receiptIp || cfg.kitchenIp);
+  const targetPort = Number(kind === 'kitchen' ? cfg.kitchenPort : (cfg.receiptPort || cfg.kitchenPort || 9100));
+
+  try {
+    const res = await fetch(`http://${cfg.bridgeHost}:${cfg.bridgePort}/print/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: targetIp, port: targetPort }),
+    });
+    return res.ok;
+  } catch (e) {
+    console.error('Test network printer failed:', e);
+    return false;
+  }
 }

@@ -183,6 +183,8 @@ export interface Order {
   createdAt: number;
   tinNumber?: string; // Customer TIN for VAT invoices
   notes?: string;
+  amountReceived?: number;
+  change?: number;
 }
 
 export interface AuditLog {
@@ -338,3 +340,17 @@ export const MOCK_ZONES: PlaceZone[] = [
 ];
 
 export const MOCK_EXPENSES: Expense[] = [];
+
+export interface PrintJob {
+  id: string;
+  orderId: string;
+  type: 'KITCHEN_TICKET' | 'BILL' | 'CUSTOMER_RECEIPT';
+  destination: string;
+  printerId?: string;
+  payload: string;
+  status: 'QUEUED' | 'PRINTING' | 'PRINTED' | 'FAILED';
+  attempts: number;
+  createdAt: number;
+  lastError?: string | null;
+  printedAt?: number | null;
+}

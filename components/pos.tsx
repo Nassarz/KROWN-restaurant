@@ -58,6 +58,8 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
 
   // Customer TIN & Payment Method State
   const [tinNumber, setTinNumber] = useState<string>('');
+  const [editingNoteItemId, setEditingNoteItemId] = useState<string | null>(null);
+  const [tempNoteText, setTempNoteText] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'MTN Mobile Money' | 'Airtel Money' | 'Credit Card' | 'Corporate Credit'>('MTN Mobile Money');
   const [companies, setCompanies] = useState<any[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
@@ -1014,6 +1016,27 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
                       </div>
                     )}
                     <p className="text-orange-500 font-bold">{formatUGX(itemLineTotal(item))}</p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <button
+                        onClick={() => {
+                          setEditingNoteItemId(item.id);
+                          setTempNoteText(item.note || '');
+                        }}
+                        className={`text-[9px] font-extrabold flex items-center gap-1 py-1 px-1.5 rounded-lg transition-all ${
+                          item.note
+                            ? 'bg-purple-500/20 text-purple-600 dark:text-purple-300'
+                            : 'bg-slate-200/50 text-slate-600 dark:bg-white/5 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-white/10'
+                        }`}
+                      >
+                        <FileText className="w-3 h-3" />
+                        {item.note ? 'Edit Note' : 'Add Note'}
+                      </button>
+                      {item.note && (
+                        <span className="text-[9px] italic text-slate-500 dark:text-slate-400 truncate max-w-[90px]" title={item.note}>
+                          {`"${item.note}"`}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center gap-1 bg-white dark:bg-black/40 p-1 rounded-xl border border-black/5 dark:border-white/5">
                     <button onClick={() => updateQuantity(item.id, -1)} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 active:scale-95 transition-all">
@@ -1174,6 +1197,65 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
                     No active ongoing/open orders found.
                   </div>
                 )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+        {/* Item Note Modal */}
+        {editingNoteItemId !== null && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white dark:bg-[#1c1c1e] w-full max-w-md rounded-[2.5rem] border border-black/5 dark:border-white/5 shadow-2xl overflow-hidden p-6 space-y-4"
+            >
+              <div className="flex justify-between items-center">
+                <h3 className="text-lg font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-orange-500" /> Item Preparation Note
+                </h3>
+                <button
+                  onClick={() => setEditingNoteItemId(null)}
+                  className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 text-slate-500"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] uppercase tracking-wider font-extrabold text-slate-400 dark:text-slate-500">
+                  Instructions for the Kitchen
+                </label>
+                <textarea
+                  value={tempNoteText}
+                  onChange={(e) => setTempNoteText(e.target.value)}
+                  placeholder="e.g. Extra spicy, no onions, well-done, dressing on the side..."
+                  maxLength={150}
+                  rows={3}
+                  className="w-full bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-white/5 rounded-2xl p-4 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none"
+                />
+                <div className="text-right text-[10px] text-slate-400">
+                  {tempNoteText.length}/150 characters
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => setEditingNoteItemId(null)}
+                  className="flex-1 bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-slate-700 dark:text-slate-300 py-3 rounded-xl font-bold text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    setCart(prev => prev.map(item => item.id === editingNoteItemId ? { ...item, note: tempNoteText } : item));
+                    setEditingNoteItemId(null);
+                    setTempNoteText('');
+                  }}
+                  className="flex-1 bg-gradient-to-r from-orange-500 to-amber-500 text-white py-3 rounded-xl font-bold text-xs shadow-md shadow-orange-500/25"
+                >
+                  Save Note
+                </button>
               </div>
             </motion.div>
           </div>

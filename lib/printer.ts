@@ -1,6 +1,24 @@
 import { formatUGX } from './mockData';
 import { sendToNetworkPrinter } from './printBridge';
 import { jsPDF } from 'jspdf';
+import { dataStore } from './dataStore';
+
+function wrapText(text: string, maxLength: number): string[] {
+  const words = text.split(' ');
+  const lines: string[] = [];
+  let currentLine = '';
+
+  words.forEach((word) => {
+    if ((currentLine + (currentLine ? ' ' : '') + word).length <= maxLength) {
+      currentLine += (currentLine ? ' ' : '') + word;
+    } else {
+      if (currentLine) lines.push(currentLine);
+      currentLine = word;
+    }
+  });
+  if (currentLine) lines.push(currentLine);
+  return lines;
+}
 
 export function generateFormattedThermalReceipt(
   order: any,
@@ -32,12 +50,10 @@ export function generateFormattedThermalReceipt(
   const branchAddress = order.branchAddress || order.location || 'Kampala, Uganda';
   const branchPhone = order.branchPhone || '+256 772 100 200';
   const branchTaxId = order.branchTaxId || 'TIN: 100293481';
-  const subtotal = order.subtotal || (order.total ? order.total / 1.18 : 0);
-  const tax = order.tax || (order.total ? order.total - subtotal : 0);
   const total = order.total || 0;
 
   let text = '';
-  text += centerText('KROWN ERP') + '\n';
+  text += centerText('INTCORE POS') + '\n';
   text += centerText(branchName.toUpperCase()) + '\n';
   text += centerText(branchAddress) + '\n';
   text += centerText(`TEL: ${branchPhone} | ${branchTaxId}`) + '\n';
@@ -46,7 +62,7 @@ export function generateFormattedThermalReceipt(
   if (ticketType === 'prep') {
     text += centerText('*** KITCHEN ORDER TICKET ***') + '\n';
   } else if (ticketType === 'cashier_order') {
-    text += centerText('*** CASHIER ORDER TICKET (UNPAID) ***') + '\n';
+    text += centerText('*** CUSTOMER BILL - UNPAID ***') + '\n';
   } else if (ticketType === 'split' && splitData) {
     text += centerText(`*** SPLIT RECEIPT (${splitData.splitIndex}/${splitData.totalSplits}) ***`) + '\n';
   } else {
@@ -91,36 +107,67 @@ export function generateFormattedThermalReceipt(
 
   text += divider + '\n';
   if (ticketType === 'prep') {
-    text += formatLine('QTY  ITEM DESCRIPTION', 'NOTE/STATUS') + '\n';
+    text += formatLine('ITEM DESCRIPTION', 'QTY') + '\n';
   } else {
-    text += formatLine('ITEM DESCRIPTION', 'QTY x PRICE') + '\n';
+    text += formatLine('ITEM DESCRIPTION', 'PRICE') + '\n';
   }
   text += divider + '\n';
 
   if (ticketType === 'split' && splitData?.guestItems && splitData.guestItems.length > 0) {
     splitData.guestItems.forEach((it: any) => {
-      text += formatLine(`${it.quantity}x ${it.name}`, formatUGX(it.amount)) + '\n';
+      const leftText = `${it.quantity}x ${it.name}`;
+      const rightText = formatUGX(it.amount);
+      const wrapLimit = lineCharLength - rightText.length - 2;
+      const wrappedLines = wrapText(leftText, wrapLimit);
+      
+      text += formatLine(wrappedLines[0], rightText) + '\n';
+      for (let i = 1; i < wrappedLines.length; i++) {
+        text += wrappedLines[i] + '\n';
+      }
     });
   } else if (order.items && Array.isArray(order.items)) {
     order.items.forEach((item: any) => {
       if (ticketType === 'prep') {
         const itemTitle = `${item.quantity}x ${item.name}`;
-        const noteStr = item.note ? item.note.slice(0, 15) : (item.addOns?.length ? `+${item.addOns.length} add-on${item.addOns.length > 1 ? 's' : ''}` : 'Standard');
-        text += formatLine(itemTitle, noteStr) + '\n';
+        const wrappedLines = wrapText(itemTitle, lineCharLength);
+        wrappedLines.forEach((line) => {
+          text += line + '\n';
+        });
+        
         if (item.addOns?.length) {
           item.addOns.forEach((a: any) => {
-            text += formatLine(`   + ${a.name}`, `${formatUGX(a.price)}`) + '\n';
+            const wrappedAddon = wrapText(`+ ${a.name}`, lineCharLength - 4);
+            text += '   ' + wrappedAddon.join('\n   ') + '\n';
           });
         }
+        
+        if (item.note) {
+          const wrappedNote = wrapText(`* NOTE: ${item.note}`, lineCharLength - 4);
+          text += '  ' + wrappedNote.join('\n  ') + '\n';
+        }
+        text += '\n'; // Add spacer in prep ticket for readability
       } else {
         const itemTitle = `${item.quantity}x ${item.name}`;
         const addOnsTotal = (item.addOns || []).reduce((s: number, a: any) => s + (a.price * (item.quantity || 1)), 0);
         const itemPriceStr = formatUGX(((item.price || 0) * item.quantity) + addOnsTotal);
-        text += formatLine(itemTitle, itemPriceStr) + '\n';
+        
+        const wrapLimit = lineCharLength - itemPriceStr.length - 2;
+        const wrappedLines = wrapText(itemTitle, wrapLimit);
+        
+        text += formatLine(wrappedLines[0], itemPriceStr) + '\n';
+        for (let i = 1; i < wrappedLines.length; i++) {
+          text += wrappedLines[i] + '\n';
+        }
+        
         if (item.addOns?.length) {
           item.addOns.forEach((a: any) => {
             text += formatLine(`   + ${a.name}`, formatUGX(a.price * (item.quantity || 1))) + '\n';
           });
+        }
+
+        if (item.note) {
+          const wrappedNote = wrapText(`(Note: ${item.note})`, lineCharLength - 4);
+          text += '  ' + wrappedNote.join('\n  ') + '\n';
         }
       }
     });
@@ -140,20 +187,28 @@ export function generateFormattedThermalReceipt(
     text += formatLine(`THIS SPLIT (${splitData.splitIndex}/${splitData.totalSplits}):`, formatUGX(splitData.amount)) + '\n';
     text += doubleDivider + '\n';
     text += centerText('Thank you for dining with us!') + '\n';
-    text += centerText('Powered by Krown Enterprise POS') + '\n\n\n';
+    text += centerText('Powered by INTCORE POS') + '\n\n\n';
     return text;
   }
 
   // Subtotal and tax lines removed per user request (menu is tax-inclusive)
   text += doubleDivider + '\n';
   if (ticketType === 'cashier_order') {
-    text += formatLine('TOTAL DUE AT CASHIER:', formatUGX(total)) + '\n';
-    text += centerText('*** UNPAID - AWAITING CASHIER SETTLEMENT ***') + '\n';
+    text += formatLine('TOTAL DUE:', formatUGX(total)) + '\n';
+    text += doubleDivider + '\n';
+    text += centerText('*** CUSTOMER BILL - UNPAID ***') + '\n';
   } else {
     text += formatLine('TOTAL AMOUNT PAID:', formatUGX(total)) + '\n';
-    text += centerText('Thank you for dining with us!') + '\n';
+    if (order.amountReceived) {
+      text += formatLine('CASH RECEIVED:', formatUGX(order.amountReceived)) + '\n';
+    }
+    if (order.change !== undefined) {
+      text += formatLine('CHANGE DUE:', formatUGX(order.change)) + '\n';
+    }
+    text += doubleDivider + '\n';
+    text += centerText('*** PAID - THANK YOU ***') + '\n';
   }
-  text += centerText('Powered by Krown Enterprise POS') + '\n\n\n';
+  text += centerText('Powered by INTCORE POS') + '\n\n\n';
 
   return text;
 }
@@ -200,9 +255,30 @@ export async function printTicket(
   console.log(`[PRINTER] Printing ${ticketType} ticket for order:`, order.id);
   const formattedText = generateFormattedThermalReceipt(order, paperWidth, ticketType, splitData);
 
-  // Network-first: send silently to the ethernet thermal printer via bridge
   const kind: 'kitchen' | 'receipt' = ticketType === 'prep' ? 'kitchen' : 'receipt';
-  const sent = await sendToNetworkPrinter(formattedText, kind);
+  const jobId = `job-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  const typeMap = {
+    'prep': 'KITCHEN_TICKET',
+    'cashier_order': 'BILL',
+    'receipt': 'CUSTOMER_RECEIPT',
+    'split': 'CUSTOMER_RECEIPT'
+  } as const;
+  const dbType = typeMap[ticketType] || 'CUSTOMER_RECEIPT';
+  const destination = `${kind === 'kitchen' ? 'Kitchen' : 'Receipt'} Printer`;
+
+  // Register the print job
+  dataStore.addPrintJob({
+    id: jobId,
+    orderId: order.id,
+    type: dbType,
+    destination,
+    printerId: kind,
+    payload: formattedText,
+    status: 'QUEUED'
+  });
+
+  // Network-first: send silently to the ethernet thermal printer via bridge
+  const sent = await sendToNetworkPrinter(formattedText, kind, jobId, order.id, dbType);
   if (sent) {
     console.log(`[PRINTER] Sent ${ticketType} to network printer via bridge.`);
     return true;

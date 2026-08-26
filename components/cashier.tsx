@@ -12,7 +12,7 @@ import { printTicket, downloadReceiptFile, generateFormattedThermalReceipt } fro
 import { dataStore } from '@/lib/dataStore';
 import { vibrate } from '@/lib/utils';
 import { useNotification } from '@/hooks/use-notification';
-import { getPrinterConfig, setPrinterConfig, testNetworkPrinter } from '@/lib/printBridge';
+import { getPrinterConfig, setPrinterConfig, testNetworkPrinter, retryNetworkPrintJob } from '@/lib/printBridge';
 
 export default function CashierDashboard({ setView, activeStaff }: { setView: (v: 'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier') => void; activeStaff?: any }) {
   const [orders, setOrders] = useState<any[]>([]);
@@ -38,6 +38,60 @@ export default function CashierDashboard({ setView, activeStaff }: { setView: (v
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
   const [selectedStaffId, setSelectedStaffId] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
+
+  const [cashAmountReceived, setCashAmountReceived] = useState<string>('');
+  const [printJobsList, setPrintJobsList] = useState<any[]>([]);
+  const [printerStatus, setPrinterStatus] = useState<string>('UNKNOWN');
+  const [printerStatusMsg, setPrinterStatusMsg] = useState<string>('');
+
+  const refreshPrintJobs = () => {
+    if (selectedOrder) {
+      setPrintJobsList(dataStore.getPrintJobs(selectedOrder.id));
+    } else {
+      setPrintJobsList(dataStore.getPrintJobs());
+    }
+  };
+
+  const checkPrinterHealth = async () => {
+    try {
+      const cfg = getPrinterConfig();
+      if (!cfg.enabled || !cfg.kitchenIp) {
+        setPrinterStatus('DISABLED');
+        setPrinterStatusMsg('Printer bridge is disabled.');
+        return;
+      }
+      setPrinterStatus('CHECKING');
+      const res = await fetch(`http://${cfg.bridgeHost}:${cfg.bridgePort}/printers/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: cfg.kitchenIp, port: cfg.kitchenPort })
+      });
+      if (!res.ok) throw new Error('Agent unreachable');
+      const data = await res.json();
+      if (data.ok) {
+        setPrinterStatus('CONNECTED');
+        setPrinterStatusMsg('Printer is online.');
+      } else {
+        setPrinterStatus(data.status || 'UNREACHABLE');
+        setPrinterStatusMsg(data.error || 'Connection timeout.');
+      }
+    } catch (e) {
+      setPrinterStatus('AGENT_OFFLINE');
+      setPrinterStatusMsg('Local print bridge is offline.');
+    }
+  };
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      refreshPrintJobs();
+      checkPrinterHealth();
+    }, 0);
+    const interval = setInterval(refreshPrintJobs, 3000);
+    return () => {
+      clearTimeout(t);
+      clearInterval(interval);
+    };
+  }, [selectedOrder]);
 
   // ── ENTERPRISE SPLIT BILL STATE ─────────────────────────────────────────────
   interface GuestSplitRow {
@@ -255,6 +309,21 @@ export default function CashierDashboard({ setView, activeStaff }: { setView: (v
         return;
       }
 
+      const amountDue = order.total - (order.paidAmount || 0);
+      let calculatedChange = 0;
+      let calculatedReceived = amountDue;
+
+      if (paymentMethod === 'Cash') {
+        const received = Number(cashAmountReceived);
+        if (!received || received < amountDue) {
+          alert(`Invalid Cash Amount: Please enter cash amount equal to or greater than ${formatUGX(amountDue)}.`);
+          setIsProcessing(false);
+          return;
+        }
+        calculatedReceived = received;
+        calculatedChange = received - amountDue;
+      }
+
       const updated = dataStore.payOrder(order.id, {
         paymentMethod,
         isCorporateCredit: paymentMethod === 'Corporate Credit',
@@ -264,12 +333,15 @@ export default function CashierDashboard({ setView, activeStaff }: { setView: (v
         companyStaffName: paymentMethod === 'Corporate Credit' ? activeStaffObj?.name : undefined,
         workId: paymentMethod === 'Corporate Credit' ? activeStaffObj?.workId : undefined,
         tinNumber: tinNumber.trim() || undefined,
+        amountReceived: calculatedReceived,
+        change: calculatedChange
       });
 
       if (updated) {
         // Auto-print thermal paid receipt for cashier & client
         printTicket('receipt', updated, paperWidth);
         setSelectedOrder(updated);
+        setCashAmountReceived('');
       }
     } catch (e) {
       console.warn('Payment error:', e);
@@ -660,6 +732,48 @@ export default function CashierDashboard({ setView, activeStaff }: { setView: (v
                   </div>
                 )}
 
+                {/* Cash Settlement Calculations */}
+                {paymentMethod === 'Cash' && selectedOrder.paymentStatus !== 'paid' && (
+                  <div className="bg-orange-500/5 dark:bg-orange-500/10 border border-orange-500/20 p-4 rounded-2xl space-y-3">
+                    <h5 className="font-extrabold text-xs text-orange-600 dark:text-orange-400 uppercase tracking-wider">Cash Settlement Calc</h5>
+                    <div className="flex gap-4 items-center">
+                      <div className="flex-1">
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1">CASH AMOUNT RECEIVED (UGX)</label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          placeholder="e.g. 50000"
+                          value={cashAmountReceived}
+                          onChange={e => {
+                            const cleaned = e.target.value.replace(/\D/g, '');
+                            setCashAmountReceived(cleaned);
+                          }}
+                          className="w-full bg-white dark:bg-[#121214] border border-black/10 dark:border-white/10 rounded-xl p-2.5 text-sm font-bold text-slate-900 dark:text-white"
+                        />
+                      </div>
+                      <div className="text-right">
+                        <span className="block text-[10px] font-bold text-slate-500 mb-1">CHANGE TO GIVE</span>
+                        <span className={`text-lg font-black ${
+                          Number(cashAmountReceived) - (selectedOrder.total - (selectedOrder.paidAmount || 0)) >= 0
+                            ? 'text-green-500'
+                            : 'text-rose-500'
+                        }`}>
+                          {Number(cashAmountReceived) > 0
+                            ? formatUGX(Math.max(0, Number(cashAmountReceived) - (selectedOrder.total - (selectedOrder.paidAmount || 0))))
+                            : formatUGX(0)
+                          }
+                        </span>
+                      </div>
+                    </div>
+                    {Number(cashAmountReceived) > 0 && Number(cashAmountReceived) < (selectedOrder.total - (selectedOrder.paidAmount || 0)) && (
+                      <p className="text-[10px] text-rose-500 font-extrabold flex items-center gap-1">
+                        ⚠️ Amount received is less than total due.
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {/* Split Payments Log if any exist */}
                 {selectedOrder.splitPayments?.length > 0 && (
                   <div className="bg-yellow-500/10 border border-yellow-500/20 p-4 rounded-2xl space-y-2">
@@ -674,36 +788,119 @@ export default function CashierDashboard({ setView, activeStaff }: { setView: (v
                 )}
               </div>
 
+              {/* Printer Connectivity Status Widget */}
+              <div className="bg-slate-50 dark:bg-black/30 border border-black/5 dark:border-white/5 p-3.5 rounded-2xl flex items-center justify-between text-xs font-semibold">
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-400 block">Kitchen/Receipt Printer</span>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className={`w-2 h-2 rounded-full ${
+                      printerStatus === 'CONNECTED' ? 'bg-green-500' :
+                      printerStatus === 'CHECKING' ? 'bg-amber-500 animate-pulse' :
+                      printerStatus === 'PORT_CLOSED' || printerStatus === 'UNREACHABLE' ? 'bg-rose-500' : 'bg-slate-400'
+                    }`} />
+                    <span className="capitalize text-[10px] text-slate-700 dark:text-slate-300 font-bold">{printerStatus.toLowerCase().replace('_', ' ')}</span>
+                  </div>
+                </div>
+                <button
+                  onClick={checkPrinterHealth}
+                  className="bg-white dark:bg-white/5 hover:bg-slate-100 dark:hover:bg-white/10 p-2 rounded-lg border border-black/5 dark:border-white/5 active:scale-95 transition-all text-slate-600 dark:text-slate-300"
+                  title="Test printer network status"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
               {/* Action Buttons */}
               <div className="space-y-3 pt-2">
                 <div className="flex gap-3">
                   <button
                     onClick={() => openSplitModal(selectedOrder)}
-                    className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-3.5 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-purple-500/20 text-xs transition-all active:scale-95"
+                    disabled={selectedOrder.paymentStatus === 'paid'}
+                    className="flex-1 bg-purple-600 hover:bg-purple-700 disabled:opacity-40 disabled:hover:bg-purple-600 text-white py-3.5 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-purple-500/20 text-xs transition-all active:scale-95"
                   >
-                    <Split className="w-4 h-4" /> Split Bill (Per Guest / Items)
+                    <Split className="w-4 h-4" /> Split Bill
                   </button>
 
-                  <button
-                    onClick={() => printTicket('receipt', selectedOrder, paperWidth)}
-                    className="bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-slate-200 px-4 py-3.5 rounded-2xl font-bold flex items-center justify-center gap-1.5 text-xs hover:bg-slate-200"
-                  >
-                    <Printer className="w-4 h-4" /> Thermal Print
-                  </button>
+                  {selectedOrder.paymentStatus !== 'paid' ? (
+                    <button
+                      onClick={() => printTicket('cashier_order', selectedOrder, paperWidth)}
+                      className="flex-1 bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-950 py-3.5 rounded-2xl font-bold flex items-center justify-center gap-1.5 text-xs transition-all active:scale-95"
+                    >
+                      <Printer className="w-4 h-4" /> Print Bill
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => printTicket('receipt', selectedOrder, paperWidth)}
+                      className="flex-1 bg-green-600 hover:bg-green-700 text-white py-3.5 rounded-2xl font-bold flex items-center justify-center gap-1.5 text-xs transition-all active:scale-95"
+                    >
+                      <Printer className="w-4 h-4" /> Print Receipt
+                    </button>
+                  )}
                 </div>
 
-                <button
-                  onClick={() => handleCompleteFullPayment(selectedOrder)}
-                  disabled={isProcessing || selectedOrder.paymentStatus === 'paid'}
-                  className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 disabled:opacity-50 text-white py-4 rounded-2xl font-bold shadow-xl shadow-orange-500/30 text-sm flex items-center justify-center gap-2 active:scale-[0.98]"
-                >
-                  {isProcessing ? (
-                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  ) : (
-                    `Complete Full Settlement (${formatUGX(selectedOrder.total - (selectedOrder.paidAmount || 0))})`
-                  )}
-                </button>
+                {selectedOrder.paymentStatus !== 'paid' && (
+                  <button
+                    onClick={() => handleCompleteFullPayment(selectedOrder)}
+                    disabled={isProcessing || (paymentMethod === 'Cash' && (!cashAmountReceived || Number(cashAmountReceived) < (selectedOrder.total - (selectedOrder.paidAmount || 0))))}
+                    className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 disabled:opacity-50 text-white py-4 rounded-2xl font-bold shadow-xl shadow-orange-500/30 text-sm flex items-center justify-center gap-2 active:scale-[0.98]"
+                  >
+                    {isProcessing ? (
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      `Complete Full Settlement (${formatUGX(selectedOrder.total - (selectedOrder.paidAmount || 0))})`
+                    )}
+                  </button>
+                )}
               </div>
+
+              {/* Print Queue Monitor */}
+              {printJobsList.length > 0 && (
+                <div className="bg-slate-50 dark:bg-black/35 border border-black/5 dark:border-white/5 rounded-2xl p-4 space-y-3 mt-4">
+                  <div className="flex justify-between items-center pb-2 border-b border-black/5 dark:border-white/5">
+                    <h5 className="font-extrabold text-[10px] text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5" /> Recent Print Jobs
+                    </h5>
+                    <button
+                      onClick={refreshPrintJobs}
+                      className="text-[9px] font-bold text-orange-500 hover:underline"
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                  <div className="space-y-2 max-h-[160px] overflow-y-auto custom-scrollbar">
+                    {printJobsList.map((job) => (
+                      <div key={job.id} className="flex justify-between items-center text-xs font-semibold p-2.5 bg-white dark:bg-[#121214] rounded-xl border border-black/5 dark:border-white/5 shadow-sm">
+                        <div className="min-w-0 flex-1 pr-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className={`w-2 h-2 rounded-full ${
+                              job.status === 'PRINTED' ? 'bg-green-500' :
+                              job.status === 'PRINTING' ? 'bg-amber-500 animate-pulse' :
+                              job.status === 'FAILED' ? 'bg-rose-500' : 'bg-slate-400'
+                            }`} />
+                            <span className="text-[10px] text-slate-700 dark:text-slate-300 font-extrabold capitalize">{job.type.replace('_', ' ').toLowerCase()}</span>
+                          </div>
+                          <span className="text-[9px] text-slate-400 block truncate mt-0.5">{job.destination}</span>
+                          {job.lastError && (
+                            <span className="text-[9px] text-rose-500 block leading-tight font-medium mt-0.5 truncate">{job.lastError}</span>
+                          )}
+                        </div>
+                        {job.status === 'FAILED' && (
+                          <button
+                            onClick={async () => {
+                              vibrate(20);
+                              await retryNetworkPrintJob(job.id);
+                              refreshPrintJobs();
+                            }}
+                            className="bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20 text-[9px] font-bold px-2 py-1 rounded-lg transition-all"
+                          >
+                            Retry
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </motion.div>
           </div>
         )}
