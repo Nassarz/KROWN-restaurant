@@ -75,7 +75,10 @@ const RECEIPT_PRINTER_IP = args['receipt-ip'] || env.RECEIPT_PRINTER_IP || '192.
 const RECEIPT_PRINTER_PORT = parseInt(args['receipt-port'] || env.RECEIPT_PRINTER_PORT || '9100', 10);
 
 const IS_RECEIPT_USB = args['receipt-usb'] === true || env.RECEIPT_USB === 'true';
-const USB_PRINTER_PATH = args['usb-path'] || env.USB_PRINTER_PATH || '/dev/usb/lp0';
+const IS_WINDOWS = process.platform === 'win32';
+// On Windows: USB printers appear as \\.\USB001 or LPT1. On Linux: /dev/usb/lp0
+const DEFAULT_USB_PATH = IS_WINDOWS ? '\\\\.\\USB001' : '/dev/usb/lp0';
+const USB_PRINTER_PATH = args['usb-path'] || env.USB_PRINTER_PATH || DEFAULT_USB_PATH;
 
 // ── SUPABASE CLIENT INITIALIZATION ──────────────────────────────────────────
 let supabase = null;
