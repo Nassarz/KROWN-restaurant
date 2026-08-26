@@ -215,11 +215,8 @@ export interface InventoryMovement {
 }
 
 export const formatUGX = (amount: number): string => {
-  return new Intl.NumberFormat('en-UG', {
-    style: 'currency',
-    currency: 'UGX',
-    maximumFractionDigits: 0
-  }).format(amount).replace('UGX', 'UGX ');
+  const formatted = Math.round(amount).toLocaleString('en-UG');
+  return `USh ${formatted}`;
 };
 
 export const PAYMENT_METHODS = [

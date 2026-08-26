@@ -46,17 +46,22 @@ export function generateFormattedThermalReceipt(
   };
 
   const dateStr = new Date(order.createdAt || Date.now()).toLocaleString();
-  const branchName = order.branchName || 'Krown Kampala Central (HQ)';
-  const branchAddress = order.branchAddress || order.location || 'Kampala, Uganda';
-  const branchPhone = order.branchPhone || '+256 772 100 200';
-  const branchTaxId = order.branchTaxId || 'TIN: 100293481';
+  const branchName = order.branchName || 'Krown Kampala';
+  const branchAddress = order.branchAddress || order.branchLocation || order.location || 'Kampala, Uganda';
+  const branchPhone = order.branchPhone || '';
+  const branchTaxId = order.branchTaxId || '';
   const total = order.total || 0;
 
   let text = '';
-  text += centerText('INTCORE POS') + '\n';
+  text += centerText('KROWN ERP') + '\n';
   text += centerText(branchName.toUpperCase()) + '\n';
   text += centerText(branchAddress) + '\n';
-  text += centerText(`TEL: ${branchPhone} | ${branchTaxId}`) + '\n';
+  if (branchPhone) {
+    const telLine = branchTaxId ? `TEL: ${branchPhone} | TIN: ${branchTaxId}` : `TEL: ${branchPhone}`;
+    text += centerText(telLine) + '\n';
+  } else if (branchTaxId) {
+    text += centerText(`TIN: ${branchTaxId}`) + '\n';
+  }
   text += doubleDivider + '\n';
 
   if (ticketType === 'prep') {
@@ -187,7 +192,7 @@ export function generateFormattedThermalReceipt(
     text += formatLine(`THIS SPLIT (${splitData.splitIndex}/${splitData.totalSplits}):`, formatUGX(splitData.amount)) + '\n';
     text += doubleDivider + '\n';
     text += centerText('Thank you for dining with us!') + '\n';
-    text += centerText('Powered by INTCORE POS') + '\n\n\n';
+    text += centerText('Powered by KROWN ERP') + '\n\n\n';
     return text;
   }
 

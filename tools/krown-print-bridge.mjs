@@ -145,14 +145,18 @@ function compileEscpos(payload, paperWidth = '80mm') {
 
     // Header Title
     chunks.push(SIZE_DOUBLE_HW, BOLD_ON);
-    center('INTCORE POS');
+    center('KROWN ERP');
     chunks.push(SIZE_NORMAL, BOLD_OFF);
 
     center((order.branchName || 'Krown Kampala').toUpperCase());
-    center(order.branchAddress || order.location || 'Kampala, Uganda');
-    center(`TEL: ${order.branchPhone || '+256 772 100 200'}`);
-    if (order.branchTaxId) {
-      center(order.branchTaxId);
+    center(order.branchAddress || order.branchLocation || order.location || 'Kampala, Uganda');
+    const branchPhone = order.branchPhone || '';
+    const branchTaxId = order.branchTaxId || '';
+    if (branchPhone) {
+      const telLine = branchTaxId ? `TEL: ${branchPhone} | TIN: ${branchTaxId}` : `TEL: ${branchPhone}`;
+      center(telLine);
+    } else if (branchTaxId) {
+      center(`TIN: ${branchTaxId}`);
     }
     
     chunks.push(ALIGN_LEFT);
@@ -191,7 +195,7 @@ function compileEscpos(payload, paperWidth = '80mm') {
       order.items.forEach(item => {
         const itemTitle = `${item.quantity}x ${item.name}`;
         const priceVal = ((item.price || 0) * item.quantity);
-        const priceStr = `UGX ${priceVal.toLocaleString()}`;
+        const priceStr = `USh ${priceVal.toLocaleString()}`;
         leftRight(itemTitle, priceStr);
         if (item.note) {
           chunks.push(ALIGN_LEFT);
@@ -201,15 +205,15 @@ function compileEscpos(payload, paperWidth = '80mm') {
     }
 
     chunks.push(Buffer.from('='.repeat(lineLength) + '\n', 'ascii'));
-    leftRight('TOTAL AMOUNT:', `UGX ${(order.total || 0).toLocaleString()}`);
+    leftRight('TOTAL AMOUNT:', `USh ${(order.total || 0).toLocaleString()}`);
     if (order.amountReceived) {
-      leftRight('CASH RECEIVED:', `UGX ${Number(order.amountReceived).toLocaleString()}`);
+      leftRight('CASH RECEIVED:', `USh ${Number(order.amountReceived).toLocaleString()}`);
     }
     if (order.changeAmount !== undefined) {
-      leftRight('CHANGE DUE:', `UGX ${Number(order.changeAmount).toLocaleString()}`);
+      leftRight('CHANGE DUE:', `USh ${Number(order.changeAmount).toLocaleString()}`);
     }
     chunks.push(Buffer.from('='.repeat(lineLength) + '\n', 'ascii'));
-    center('Powered by INTCORE POS');
+    center('Powered by KROWN ERP');
     chunks.push(Buffer.from('\n\n\n', 'ascii'));
   } else {
     // ── PLAIN TEXT RECEIPT COMPILE ──
@@ -235,7 +239,7 @@ function compileEscpos(payload, paperWidth = '80mm') {
       }
 
       // 2. Main Title (Double Size / Bold)
-      if (trimmed === 'INTCORE POS') {
+      if (trimmed === 'KROWN ERP' || trimmed === 'INTCORE POS') {
         chunks.push(ALIGN_CENTER, SIZE_DOUBLE_HW, BOLD_ON);
         chunks.push(Buffer.from(trimmed + '\n', 'ascii'));
         chunks.push(SIZE_NORMAL, BOLD_OFF);
