@@ -45,6 +45,52 @@ export function generateFormattedThermalReceipt(
     return left + ' '.repeat(Math.max(1, padding)) + right;
   };
 
+  // ── KITCHEN ORDER TICKET (Clean, Items + Notes Only) ──────────────────────
+  if (ticketType === 'prep') {
+    let text = '';
+    text += centerText('KROWN ERP') + '\n';
+    text += centerText('*** KITCHEN ORDER TICKET ***') + '\n';
+    text += doubleDivider + '\n';
+    text += formatLine('TABLE:', `${order.table || 'T1'}`) + '\n';
+    text += formatLine('AREA:', `${order.place || 'Main Dining'}`) + '\n';
+    text += formatLine('TYPE:', `${order.type || 'Dine In'}`) + '\n';
+    text += formatLine('TIME:', new Date(order.createdAt || Date.now()).toLocaleTimeString()) + '\n';
+    text += formatLine('ORDER #:', `#${(order.id || '').toUpperCase().slice(-8)}`) + '\n';
+    text += doubleDivider + '\n';
+    text += formatLine('ITEM', 'QTY') + '\n';
+    text += divider + '\n';
+
+    if (order.items && Array.isArray(order.items)) {
+      order.items.forEach((item: any) => {
+        const itemTitle = `${item.name}`;
+        const qtyStr = `x${item.quantity}`;
+        const wrappedLines = wrapText(itemTitle, lineCharLength - qtyStr.length - 2);
+        text += formatLine(wrappedLines[0], qtyStr) + '\n';
+        for (let i = 1; i < wrappedLines.length; i++) {
+          text += wrappedLines[i] + '\n';
+        }
+
+        if (item.addOns?.length) {
+          item.addOns.forEach((a: any) => {
+            const wrappedAddon = wrapText(`  + ${a.name}`, lineCharLength);
+            text += wrappedAddon.join('\n') + '\n';
+          });
+        }
+
+        if (item.note) {
+          const wrappedNote = wrapText(`  >> ${item.note.toUpperCase()}`, lineCharLength);
+          text += wrappedNote.join('\n') + '\n';
+        }
+        text += '\n';
+      });
+    }
+
+    text += doubleDivider + '\n';
+    text += centerText(`TOTAL ITEMS: ${(order.items || []).reduce((s: number, i: any) => s + (i.quantity || 1), 0)}`) + '\n';
+    text += doubleDivider + '\n\n\n';
+    return text;
+  }
+
   const dateStr = new Date(order.createdAt || Date.now()).toLocaleString();
   const branchName = order.branchName || 'Krown Kampala';
   const branchAddress = order.branchAddress || order.branchLocation || order.location || 'Kampala, Uganda';
@@ -64,9 +110,7 @@ export function generateFormattedThermalReceipt(
   }
   text += doubleDivider + '\n';
 
-  if (ticketType === 'prep') {
-    text += centerText('*** KITCHEN ORDER TICKET ***') + '\n';
-  } else if (ticketType === 'cashier_order') {
+  if (ticketType === 'cashier_order') {
     text += centerText('*** CUSTOMER BILL - UNPAID ***') + '\n';
   } else if (ticketType === 'split' && splitData) {
     text += centerText(`*** SPLIT RECEIPT (${splitData.splitIndex}/${splitData.totalSplits}) ***`) + '\n';
@@ -111,11 +155,7 @@ export function generateFormattedThermalReceipt(
   }
 
   text += divider + '\n';
-  if (ticketType === 'prep') {
-    text += formatLine('ITEM DESCRIPTION', 'QTY') + '\n';
-  } else {
-    text += formatLine('ITEM DESCRIPTION', 'PRICE') + '\n';
-  }
+  text += formatLine('ITEM DESCRIPTION', 'PRICE') + '\n';
   text += divider + '\n';
 
   if (ticketType === 'split' && splitData?.guestItems && splitData.guestItems.length > 0) {
@@ -132,26 +172,6 @@ export function generateFormattedThermalReceipt(
     });
   } else if (order.items && Array.isArray(order.items)) {
     order.items.forEach((item: any) => {
-      if (ticketType === 'prep') {
-        const itemTitle = `${item.quantity}x ${item.name}`;
-        const wrappedLines = wrapText(itemTitle, lineCharLength);
-        wrappedLines.forEach((line) => {
-          text += line + '\n';
-        });
-        
-        if (item.addOns?.length) {
-          item.addOns.forEach((a: any) => {
-            const wrappedAddon = wrapText(`+ ${a.name}`, lineCharLength - 4);
-            text += '   ' + wrappedAddon.join('\n   ') + '\n';
-          });
-        }
-        
-        if (item.note) {
-          const wrappedNote = wrapText(`* NOTE: ${item.note}`, lineCharLength - 4);
-          text += '  ' + wrappedNote.join('\n  ') + '\n';
-        }
-        text += '\n'; // Add spacer in prep ticket for readability
-      } else {
         const itemTitle = `${item.quantity}x ${item.name}`;
         const addOnsTotal = (item.addOns || []).reduce((s: number, a: any) => s + (a.price * (item.quantity || 1)), 0);
         const itemPriceStr = formatUGX(((item.price || 0) * item.quantity) + addOnsTotal);
@@ -174,17 +194,10 @@ export function generateFormattedThermalReceipt(
           const wrappedNote = wrapText(`(Note: ${item.note})`, lineCharLength - 4);
           text += '  ' + wrappedNote.join('\n  ') + '\n';
         }
-      }
     });
   }
 
   text += divider + '\n';
-
-  if (ticketType === 'prep') {
-    text += centerText(`ESTIMATED PREP TIME: ~${order.prepEstimatedMinutes || 15} MINS`) + '\n';
-    text += doubleDivider + '\n\n';
-    return text;
-  }
 
   if (ticketType === 'split' && splitData) {
     text += formatLine('Full Order Total:', formatUGX(total)) + '\n';
