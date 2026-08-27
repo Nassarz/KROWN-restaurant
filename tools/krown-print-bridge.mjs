@@ -326,68 +326,48 @@ function compileEscpos(payload, paperWidth = '80mm') {
 function writeToPrinter(ip, port, escposBuffer, isUsb = false, rawTextPayload = '') {
   if (isUsb) {
     return new Promise((resolve, reject) => {
-      console.log(`[PRINT_AGENT] USB_WRITE_INITIATED to ${USB_PRINTER_PATH}`);
+      console.log(`[PRINT_AGENT] USB_WRITE_INITIATED for path: ${USB_PRINTER_PATH}`);
       
-      const targetShare = USB_PRINTER_PATH.startsWith('\\') ? USB_PRINTER_PATH : '\\\\127.0.0.1\\ReceiptPrinter';
+      const candidateShares = USB_PRINTER_PATH.startsWith('\\') 
+        ? [USB_PRINTER_PATH]
+        : ['\\\\127.0.0.1\\Receiptprinter', '\\\\127.0.0.1\\Cashierr_01', '\\\\127.0.0.1\\ReceiptPrinter'];
 
-      // 1. Attempt direct Node write to Windows Shared Printer path \\127.0.0.1\ReceiptPrinter
-      fs.writeFile(targetShare, escposBuffer, (err) => {
-        if (!err) {
-          console.log(`[PRINT_AGENT] Direct write to shared printer ${targetShare} successful.`);
-          return resolve(true);
+      const tryShare = (index) => {
+        if (index >= candidateShares.length) {
+          return reject(new Error(`All Windows printer shares failed (${candidateShares.join(', ')}). Check printer sharing.`));
         }
 
-        console.warn(`[PRINT_AGENT] Direct write to ${targetShare} notice: ${err.message}. Running Windows spooler fallback...`);
+        const targetShare = candidateShares[index];
+        console.log(`[PRINT_AGENT] Attempting print to target share: ${targetShare}...`);
 
-        if (IS_WINDOWS) {
-          // 2. Windows Fallback: Write both binary ESC/POS & plain text version to temp files
-          const timeId = Date.now();
-          const tmpBin = path.join(os.tmpdir(), `krown_bin_${timeId}.raw`);
-          const tmpTxt = path.join(os.tmpdir(), `krown_txt_${timeId}.txt`);
+        fs.writeFile(targetShare, escposBuffer, (err) => {
+          if (!err) {
+            console.log(`[PRINT_AGENT] ✓ Direct write to shared printer ${targetShare} successful.`);
+            return resolve(true);
+          }
 
-          const textContent = (rawTextPayload || escposBuffer.toString('ascii')).replace(/[\x00-\x09\x0B-\x1F\x7F-\x9F]/g, '');
+          if (IS_WINDOWS) {
+            const timeId = Date.now();
+            const tmpBin = path.join(os.tmpdir(), `krown_bin_${timeId}.raw`);
+            fs.writeFileSync(tmpBin, escposBuffer);
 
-          fs.writeFileSync(tmpBin, escposBuffer);
-          fs.writeFileSync(tmpTxt, textContent + '\n\n\n\n');
-
-          // Attempt binary copy first
-          const cmdBin = `copy /b "${tmpBin}" "${targetShare}"`;
-          exec(cmdBin, (execErr) => {
-            fs.unlink(tmpBin, () => {});
-
-            if (!execErr) {
-              fs.unlink(tmpTxt, () => {});
-              console.log(`[PRINT_AGENT] Windows copy /b binary print successful.`);
-              return resolve(true);
-            }
-
-            console.warn(`[PRINT_AGENT] Binary copy failed (${execErr.message}). Fallback to plain text print...`);
-
-            // Fallback: Copy plain text to shared printer
-            const cmdTxt = `copy /b "${tmpTxt}" "${targetShare}"`;
-            exec(cmdTxt, (txtErr) => {
-              fs.unlink(tmpTxt, () => {});
-              if (txtErr) {
-                // Second Fallback: print /d command
-                const printCmd = `print /d:"${targetShare}" "${tmpTxt}"`;
-                exec(printCmd, (printErr) => {
-                  if (printErr) {
-                    reject(new Error(`Windows USB print failed. Ensure receipt printer is shared as 'ReceiptPrinter'. Error: ${execErr.message}`));
-                  } else {
-                    console.log(`[PRINT_AGENT] Windows print /d text print successful.`);
-                    resolve(true);
-                  }
-                });
-              } else {
-                console.log(`[PRINT_AGENT] Windows plain text print successful.`);
-                resolve(true);
+            const cmdBin = `copy /b "${tmpBin}" "${targetShare}"`;
+            exec(cmdBin, (execErr) => {
+              fs.unlink(tmpBin, () => {});
+              if (!execErr) {
+                console.log(`[PRINT_AGENT] ✓ Windows copy /b print successful to ${targetShare}.`);
+                return resolve(true);
               }
+              console.warn(`[PRINT_AGENT] Share ${targetShare} failed: ${execErr.message}. Trying next share...`);
+              tryShare(index + 1);
             });
-          });
-        } else {
-          reject(new Error(`USB write error: ${err.message}`));
-        }
-      });
+          } else {
+            tryShare(index + 1);
+          }
+        });
+      };
+
+      tryShare(0);
     });
   }
 
