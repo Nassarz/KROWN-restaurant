@@ -115,24 +115,40 @@ export async function retryNetworkPrintJob(jobId: string): Promise<boolean> {
 }
 
 
-export async function testNetworkPrinter(ip: string, port: number = 9100): Promise<{ ok: boolean; status: string; error?: string }> {
+export async function testNetworkPrinter(target: string = 'kitchen', port: number = 9100): Promise<boolean> {
   const cfg = getPrinterConfig();
   const host = cfg.bridgeHost || '127.0.0.1';
   const bridgePort = cfg.bridgePort || 9101;
 
+  let targetIp = target;
+  let targetPort = port;
+
+  if (target === 'kitchen') {
+    targetIp = cfg.kitchenIp || '192.168.1.34';
+    targetPort = cfg.kitchenPort || 9100;
+  } else if (target === 'receipt') {
+    targetIp = cfg.receiptIp || '127.0.0.1';
+    targetPort = cfg.receiptPort || 9100;
+  }
+
   try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
     const res = await fetch(`http://${host}:${bridgePort}/printers/test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ip, port })
+      signal: controller.signal,
+      body: JSON.stringify({ ip: targetIp, port: targetPort })
     });
+    clearTimeout(timer);
     if (res.ok) {
-      return await res.json();
+      const data = await res.json();
+      return data.ok === true || data.status === 'CONNECTED';
     }
-  } catch (err: any) {
-    return { ok: false, status: 'UNREACHABLE', error: `Print agent unavailable on http://${host}:${bridgePort}` };
+  } catch {
+    return false;
   }
-  return { ok: false, status: 'UNREACHABLE', error: 'Printer test failed' };
+  return false;
 }
 
 export async function sendTestPrintTicket(ip: string, port: number = 9100): Promise<{ ok: boolean; status: string; error?: string }> {
@@ -153,22 +169,4 @@ export async function sendTestPrintTicket(ip: string, port: number = 9100): Prom
     return { ok: false, status: 'FAILED', error: err.message };
   }
   return { ok: false, status: 'FAILED', error: 'Test print request failed' };
-}
-
-export async function testNetworkPrinterKind(kind: 'kitchen' | 'receipt'): Promise<boolean> {
-  const cfg = getPrinterConfig();
-  const targetIp = kind === 'kitchen' ? cfg.kitchenIp : (cfg.receiptIp || cfg.kitchenIp);
-  const targetPort = Number(kind === 'kitchen' ? cfg.kitchenPort : (cfg.receiptPort || cfg.kitchenPort || 9100));
-
-  try {
-    const res = await fetch(`http://${cfg.bridgeHost}:${cfg.bridgePort}/print/test`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ip: targetIp, port: targetPort }),
-    });
-    return res.ok;
-  } catch (e) {
-    console.error('Test network printer failed:', e);
-    return false;
-  }
 }
