@@ -302,35 +302,31 @@ export async function printTicket(
     return true;
   }
 
-  // If printer bridge is enabled, bypass the web-based iframe print dialog fallback.
-  // The print bridge daemon running on the Cashier PC will process the job from Supabase.
-  const cfg = getPrinterConfig();
-  if (cfg.enabled) {
-    console.log(`[PRINTER] Job registered in queue. Handled via network print bridge daemon.`);
-    return true;
-  }
-
-  // Fallback: Web-based printing using dynamic hidden iframe (never blocked by popup blockers!)
+  // Fallback / Web-based printing: dynamic hidden iframe (works in Chrome, Edge, Firefox)
   if (typeof window !== 'undefined') {
     // Check if there is an existing print iframe and remove it
     const existing = document.getElementById('krown-print-iframe');
-    if (existing) {
-      document.body.removeChild(existing);
+    if (existing && existing.parentNode) {
+      existing.parentNode.removeChild(existing);
     }
 
     const iframe = document.createElement('iframe');
     iframe.id = 'krown-print-iframe';
-    iframe.style.position = 'absolute';
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
     iframe.style.width = '0px';
     iframe.style.height = '0px';
     iframe.style.border = '0px';
-    iframe.style.left = '-9999px';
+    iframe.style.opacity = '0';
+    iframe.style.pointerEvents = 'none';
     document.body.appendChild(iframe);
 
     const doc = iframe.contentWindow?.document || iframe.contentDocument;
     if (doc) {
       doc.open();
       doc.write(`
+        <!DOCTYPE html>
         <html>
           <head>
             <title>Thermal Receipt - #${order.id} [${ticketType.toUpperCase()}]</title>
@@ -361,12 +357,11 @@ export async function printTicket(
       } catch (e) {
         console.warn('[PRINTER] Iframe print error:', e);
       } finally {
-        // Wait a bit before removing to allow print command handover in some browsers
         setTimeout(() => {
           if (iframe.parentNode) {
-            document.body.removeChild(iframe);
+            iframe.parentNode.removeChild(iframe);
           }
-        }, 1000);
+        }, 1500);
       }
     }, 250);
 
