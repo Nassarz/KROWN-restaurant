@@ -11,6 +11,8 @@ import http from 'node:http';
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { exec } from 'node:child_process';
 
 // Parse command line arguments
 const args = {};
@@ -292,13 +294,41 @@ function writeToPrinter(ip, port, escposBuffer, isUsb = false) {
   if (isUsb) {
     return new Promise((resolve, reject) => {
       console.log(`[PRINT_AGENT] USB_WRITE_INITIATED to ${USB_PRINTER_PATH}`);
+      
+      // 1. Direct file write attempt (Linux /dev/usb/lp0 or mapped Windows device)
       fs.writeFile(USB_PRINTER_PATH, escposBuffer, (err) => {
-        if (err) {
-          console.error(`[PRINT_AGENT] USB write error:`, err.message);
-          reject(new Error(`USB write error: ${err.message}`));
-        } else {
+        if (!err) {
           console.log(`[PRINT_AGENT] USB write successful. Sent ${escposBuffer.length} bytes.`);
-          resolve(true);
+          return resolve(true);
+        }
+
+        console.warn(`[PRINT_AGENT] Direct USB write notice (${err.message}). Attempting Windows raw spooler fallback...`);
+
+        if (IS_WINDOWS) {
+          // 2. Windows Fallback: Write buffer to temp file and copy to shared printer/LPT port
+          const tmpFile = path.join(os.tmpdir(), `krown_receipt_${Date.now()}.bin`);
+          fs.writeFile(tmpFile, escposBuffer, (tmpErr) => {
+            if (tmpErr) {
+              return reject(new Error(`Failed to create temp print file: ${tmpErr.message}`));
+            }
+
+            const sharePath = USB_PRINTER_PATH.startsWith('\\') ? USB_PRINTER_PATH : '\\\\127.0.0.1\\ReceiptPrinter';
+            const cmd = `copy /b "${tmpFile}" "${sharePath}"`;
+
+            exec(cmd, (execErr) => {
+              fs.unlink(tmpFile, () => {});
+
+              if (execErr) {
+                console.error(`[PRINT_AGENT] Windows raw copy print failed:`, execErr.message);
+                reject(new Error(`Windows USB print failed. Please share receipt printer as 'ReceiptPrinter' in Printer Settings. Error: ${execErr.message}`));
+              } else {
+                console.log(`[PRINT_AGENT] Windows copy /b print successful to ${sharePath}.`);
+                resolve(true);
+              }
+            });
+          });
+        } else {
+          reject(new Error(`USB write error: ${err.message}`));
         }
       });
     });
