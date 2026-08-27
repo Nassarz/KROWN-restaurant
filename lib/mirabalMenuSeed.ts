@@ -436,16 +436,17 @@ export function ensureMirabalBranchAndMenu() {
     });
   }
 
-  const existingProducts = dataStore.getProducts(mirabal.id);
-  const existingNames = new Set(existingProducts.map(p => p.name.trim().toLowerCase()));
+  const allProducts = dataStore.getProducts('all');
+  const existingNamesMap = new Map(allProducts.map(p => [p.name.trim().toLowerCase(), p]));
 
   for (const item of MIRABAL_MENU_ITEMS) {
-    if (!existingNames.has(item.name.trim().toLowerCase())) {
+    const existing = existingNamesMap.get(item.name.trim().toLowerCase());
+    if (!existing) {
       dataStore.addProduct({
         name: item.name,
         price: item.price,
         category: item.category,
-        image: item.image,
+        image: '',
         description: item.description,
         available: true,
         requiresKitchen: item.requiresKitchen ?? true,
@@ -453,6 +454,15 @@ export function ensureMirabalBranchAndMenu() {
         branchName: mirabal.name,
       });
 
+      dataStore.addCustomCategory(item.category);
+    } else if (!existing.branchId || existing.branchId !== mirabal.id) {
+      dataStore.updateProduct(existing.id, {
+        branchId: mirabal.id,
+        branchName: mirabal.name,
+        category: item.category,
+        description: item.description || existing.description,
+        price: item.price,
+      });
       dataStore.addCustomCategory(item.category);
     }
   }

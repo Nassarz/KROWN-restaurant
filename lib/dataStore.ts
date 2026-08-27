@@ -795,7 +795,19 @@ class DataStoreEngine {
     if (branchId && branchId !== 'all') {
       const b = this.branches.find(x => x.id === branchId || x.name.toLowerCase() === branchId.toLowerCase());
       const targetId = b ? b.id : branchId;
-      return this.products.filter(p => p.branchId === targetId || (b && p.branchName && p.branchName.toLowerCase() === b.name.toLowerCase()));
+      const bName = b ? b.name.toLowerCase() : branchId.toLowerCase();
+      
+      const filtered = this.products.filter(p =>
+        p.branchId === targetId ||
+        (p.branchName && p.branchName.toLowerCase() === bName) ||
+        (bName.includes('mirabal') && (p.branchName?.toLowerCase().includes('mirabal') || p.branchId === 'branch-mirabal'))
+      );
+
+      if (filtered.length === 0 && bName.includes('mirabal')) {
+        return this.products.filter(p => p.branchId === 'branch-mirabal' || p.branchName?.toLowerCase() === 'mirabal');
+      }
+
+      return filtered;
     }
     return this.products;
   }

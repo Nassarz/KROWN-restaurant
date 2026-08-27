@@ -109,8 +109,8 @@ export default function AppRouter() {
           // Auto-route on session restore
           if (staff.role === 'Super Admin') setView('admin');
           else if (staff.role === 'Branch Manager') setView('manager');
+          else if (staff.role === 'Cashier') setView('pos'); // Cashier goes straight to POS / Table Management
           else if (staff.role === 'Head Chef' || staff.role === 'Kitchen Staff') setView('kitchen');
-          else if (staff.role === 'Cashier') setView('cashier');
           else setView('pos');
         }
       } catch (err) {
@@ -162,33 +162,38 @@ export default function AppRouter() {
       return;
     }
 
-    // Role-Level Access Validation Policy (RLS Guard)
-    if (role === 'Senior Waiter' && targetView !== 'pos') {
-      alert('Access Denied (RLS Security Guard): POS Waiter accounts are strictly restricted to POS view.');
-      return;
-    }
-
-    if ((role === 'Head Chef' || role === 'Kitchen Staff') && targetView !== 'kitchen') {
-      alert('Access Denied (RLS Security Guard): Kitchen staff accounts are strictly restricted to Kitchen Display.');
-      return;
-    }
-
-    if (role === 'Cashier') {
-      if (targetView === 'admin' || targetView === 'manager') {
-        alert('Access Denied (RLS Security Guard): Cashier accounts cannot access Manager or Admin dashboards.');
+    // Branch Manager has full seamless access to Manager, POS, Cashier, Kitchen without auth prompts
+    if (role === 'Branch Manager') {
+      if (targetView === 'admin') {
+        alert('Access Denied: Branch Managers cannot access Super Admin Global HQ Settings.');
         return;
       }
       setView(targetView);
       return;
     }
 
-    if (role === 'Branch Manager' && targetView === 'admin') {
-      alert('Access Denied (RLS Security Guard): Branch Managers cannot access Super Admin Global HQ Settings.');
+    // Cashier has full seamless access to POS (Table Management) and Cashier Portal without auth prompts
+    if (role === 'Cashier') {
+      if (targetView === 'admin' || targetView === 'manager') {
+        alert('Access Denied: Cashier accounts cannot access Manager or Admin dashboards.');
+        return;
+      }
+      setView(targetView);
       return;
     }
 
-    setPendingView(targetView);
-    setShowAuthModal(true);
+    // Role-Level Access Validation Policy (RLS Guard)
+    if (role === 'Senior Waiter' && targetView !== 'pos') {
+      alert('Access Denied: POS Waiter accounts are restricted to POS view.');
+      return;
+    }
+
+    if ((role === 'Head Chef' || role === 'Kitchen Staff') && targetView !== 'kitchen') {
+      alert('Access Denied: Kitchen staff accounts are restricted to Kitchen Display.');
+      return;
+    }
+
+    setView(targetView);
   };
 
   const handleStaffLogin = async (e: React.FormEvent) => {
@@ -373,8 +378,8 @@ export default function AppRouter() {
       // Auto-route to the correct dashboard by role
       if (foundStaff.role === 'Super Admin') setView('admin');
       else if (foundStaff.role === 'Branch Manager') setView('manager');
+      else if (foundStaff.role === 'Cashier') setView('pos'); // Cashiers go straight to Table Management (POS)
       else if (foundStaff.role === 'Head Chef' || foundStaff.role === 'Kitchen Staff') setView('kitchen');
-      else if (foundStaff.role === 'Cashier') setView('cashier');
       else setView('pos');
 
       setIsSubmitting(false);
