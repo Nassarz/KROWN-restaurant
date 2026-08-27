@@ -76,12 +76,13 @@ export async function sendToNetworkPrinter(
   orderId: string,
   type: 'KITCHEN_TICKET' | 'BILL' | 'CUSTOMER_RECEIPT'
 ): Promise<boolean> {
-  // ── SINGLE-PATH DESIGN ──
-  // The job is already inserted in Supabase as QUEUED by printer.ts -> dataStore.addPrintJob.
-  // The daemon running on the Cashier PC watches the QUEUED table via Supabase Realtime.
-  // We always return true so the caller knows the job is enqueued — the daemon handles printing.
-  // Kitchen tickets go to TCP 192.168.1.34:9100, receipt tickets go to USB /dev/usb/lp0.
-  console.log(`[PrintBridge] Job ${jobId} (${type}) enqueued in Supabase. Daemon will print via ${kind === 'kitchen' ? 'LAN' : 'USB'}.`);
+  const cfg = getPrinterConfig();
+  if (!cfg.enabled) {
+    // When daemon bridge is disabled in POS settings, return false
+    // so POS falls back to direct browser printing (zero-daemon mode)
+    return false;
+  }
+  console.log(`[PrintBridge] Job ${jobId} (${type}) enqueued in Supabase. Daemon will print.`);
   return true;
 }
 
