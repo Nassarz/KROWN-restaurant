@@ -101,26 +101,61 @@ export async function sendToNetworkPrinter(
   return true;
 }
 
-
 export async function retryNetworkPrintJob(jobId: string): Promise<boolean> {
-  // Set print job status back to QUEUED in Supabase so the background print bridge daemon processes it
   dataStore.updatePrintJobStatus(jobId, 'QUEUED', { lastError: null, attempts: 0 });
-
   const cfg = getPrinterConfig();
   try {
-    // Fire-and-forget attempt on local HTTP bridge
     fetch(`http://${cfg.bridgeHost}:${cfg.bridgePort}/print/retry`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: jobId }),
     }).catch(() => {});
-  } catch (e) {
-    // Ignored, database sync will process it
-  }
+  } catch { /* ignore */ }
   return true;
 }
 
-export async function testNetworkPrinter(kind: 'kitchen' | 'receipt'): Promise<boolean> {
+
+export async function testNetworkPrinter(ip: string, port: number = 9100): Promise<{ ok: boolean; status: string; error?: string }> {
+  const cfg = getPrinterConfig();
+  const host = cfg.bridgeHost || '127.0.0.1';
+  const bridgePort = cfg.bridgePort || 9101;
+
+  try {
+    const res = await fetch(`http://${host}:${bridgePort}/printers/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip, port })
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err: any) {
+    return { ok: false, status: 'UNREACHABLE', error: `Print agent unavailable on http://${host}:${bridgePort}` };
+  }
+  return { ok: false, status: 'UNREACHABLE', error: 'Printer test failed' };
+}
+
+export async function sendTestPrintTicket(ip: string, port: number = 9100): Promise<{ ok: boolean; status: string; error?: string }> {
+  const cfg = getPrinterConfig();
+  const host = cfg.bridgeHost || '127.0.0.1';
+  const bridgePort = cfg.bridgePort || 9101;
+
+  try {
+    const res = await fetch(`http://${host}:${bridgePort}/print/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip, port })
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err: any) {
+    return { ok: false, status: 'FAILED', error: err.message };
+  }
+  return { ok: false, status: 'FAILED', error: 'Test print request failed' };
+}
+
+export async function testNetworkPrinterKind(kind: 'kitchen' | 'receipt'): Promise<boolean> {
   const cfg = getPrinterConfig();
   const targetIp = kind === 'kitchen' ? cfg.kitchenIp : (cfg.receiptIp || cfg.kitchenIp);
   const targetPort = Number(kind === 'kitchen' ? cfg.kitchenPort : (cfg.receiptPort || cfg.kitchenPort || 9100));

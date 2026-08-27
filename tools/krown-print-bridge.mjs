@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * KROWN POS - Network Thermal Printer Bridge (Secure Local Print Agent)
- * ---------------------------------------------------------------------
- * Runs on the Cashier computer. Binds strictly to 127.0.0.1:9101 for safety.
- * Handles print queuing, Supabase database queue syncing, ESC/POS compiling,
- * and direct TCP socket communication to ethernet printers on port 9100.
+ * INTCORE POS - Windows Production Print Agent (Zero-Dependency)
+ * ---------------------------------------------------------------
+ * Runs on the Cashier Windows PC. Listens on http://127.0.0.1:9101
+ * Consumes print_jobs from Supabase & local HTTP triggers.
+ * Compiles raw ESC/POS byte buffers for Network Xprinters (TCP/IP port 9100)
+ * and Cashier USB printers.
  */
 
 import http from 'node:http';
@@ -14,7 +15,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { exec } from 'node:child_process';
 
-// Parse command line arguments
+// Parse CLI flags
 const args = {};
 for (let i = 2; i < process.argv.length; i++) {
   const arg = process.argv[i];
@@ -31,20 +32,13 @@ for (let i = 2; i < process.argv.length; i++) {
 }
 
 const HTTP_PORT = parseInt(args.port || '9101', 10);
-
-// In-memory print job queue for HTTP client requests
 const jobs = [];
-
-// In-memory set of job IDs currently being processed to prevent duplicates
 const processingLock = new Set();
 
-// ── ENV LOADER (Zero-dependency .env.local parser) ───────────────────────────
+// ── ENV LOADER ────────────────────────────────────────────────────────────────
 function loadEnv() {
   const envPath = path.resolve(process.cwd(), '.env.local');
-  if (!fs.existsSync(envPath)) {
-    console.warn('[PRINT_AGENT] Warning: .env.local not found. Running in standalone mode.');
-    return {};
-  }
+  if (!fs.existsSync(envPath)) return {};
   const config = {};
   try {
     const content = fs.readFileSync(envPath, 'utf8');
@@ -71,35 +65,24 @@ const env = loadEnv();
 const supabaseUrl = args.url || env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseKey = args.key || env.SUPABASE_SERVICE_ROLE_KEY;
 
-const KITCHEN_PRINTER_IP = args['kitchen-ip'] || env.KITCHEN_PRINTER_IP || '192.168.1.100';
+const KITCHEN_PRINTER_IP = args['kitchen-ip'] || env.KITCHEN_PRINTER_IP || '192.168.1.34';
 const KITCHEN_PRINTER_PORT = parseInt(args['kitchen-port'] || env.KITCHEN_PRINTER_PORT || '9100', 10);
-const RECEIPT_PRINTER_IP = args['receipt-ip'] || env.RECEIPT_PRINTER_IP || '192.168.1.101';
-const RECEIPT_PRINTER_PORT = parseInt(args['receipt-port'] || env.RECEIPT_PRINTER_PORT || '9100', 10);
-
 const IS_RECEIPT_USB = args['receipt-usb'] === true || env.RECEIPT_USB === 'true';
 const IS_WINDOWS = process.platform === 'win32';
-// On Windows: USB printers appear as \\.\USB001 or LPT1. On Linux: /dev/usb/lp0
-const DEFAULT_USB_PATH = IS_WINDOWS ? '\\\\.\\USB001' : '/dev/usb/lp0';
-const USB_PRINTER_PATH = args['usb-path'] || env.USB_PRINTER_PATH || DEFAULT_USB_PATH;
+const USB_PRINTER_PATH = args['usb-path'] || env.USB_PRINTER_PATH || (IS_WINDOWS ? '\\\\127.0.0.1\\Receiptprinter' : '/dev/usb/lp0');
 
-// ── SUPABASE CLIENT INITIALIZATION ──────────────────────────────────────────
+// ── SUPABASE CLIENT ────────────────────────────────────────────────────────────
 let supabase = null;
-
 if (supabaseUrl && supabaseKey) {
   try {
     const { createClient } = await import('@supabase/supabase-js');
-    supabase = createClient(supabaseUrl, supabaseKey, {
-      auth: { persistSession: false }
-    });
-    console.log('[PRINT_AGENT] Supabase Realtime WebSocket client initialized.');
-  } catch (err) {
-    console.log('[PRINT_AGENT] Running in Zero-Dependency REST polling mode (Native Node Fetch).');
+    supabase = createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false } });
+    console.log('[PRINT_AGENT] Supabase client active.');
+  } catch {
+    console.log('[PRINT_AGENT] Zero-Dependency REST polling mode active.');
   }
-} else {
-  console.warn('[PRINT_AGENT] Supabase credentials missing. Running in local HTTP mode.');
 }
 
-// Zero-dependency REST API helpers using native Node fetch
 async function fetchQueuedJobsFromRest() {
   if (!supabaseUrl || !supabaseKey) return [];
   try {
@@ -112,7 +95,7 @@ async function fetchQueuedJobsFromRest() {
     });
     if (!res.ok) return [];
     return await res.json();
-  } catch (e) {
+  } catch {
     return [];
   }
 }
@@ -130,44 +113,69 @@ async function updateJobInRest(id, updates) {
       },
       body: JSON.stringify(updates)
     });
-  } catch (e) { /* ignore */ }
+  } catch { /* ignore */ }
 }
 
-// ── ADVANCED ESC/POS COMPILER ────────────────────────────────────────────────
-function compileEscpos(payload, paperWidth = '80mm') {
-  let order = null;
-  try {
-    if (payload.trim().startsWith('{')) {
-      order = JSON.parse(payload);
-    }
-  } catch (e) {
-    // Not JSON, fallback to plain text compile
+// ── PAYLOAD NORMALIZATION & SAFETY CHECK ──────────────────────────────────────
+function normalizePayload(payload) {
+  if (payload === null || payload === undefined) {
+    throw new Error('EMPTY_PAYLOAD: Payload is null or undefined');
   }
 
+  let text = '';
+  let orderObj = null;
+
+  if (typeof payload === 'object') {
+    orderObj = payload;
+  } else if (typeof payload === 'string') {
+    if (payload.startsWith('%PDF')) {
+      throw new Error('INVALID_PAYLOAD: Received PDF payload (%PDF). Thermal printers only support ESC/POS.');
+    }
+    if (payload.includes('<!DOCTYPE') || payload.includes('<html') || payload.includes('<svg')) {
+      throw new Error('INVALID_PAYLOAD: Received HTML/SVG payload. Thermal printers only support ESC/POS.');
+    }
+
+    try {
+      if (payload.trim().startsWith('{')) {
+        orderObj = JSON.parse(payload);
+      } else {
+        text = payload;
+      }
+    } catch {
+      text = payload;
+    }
+  } else {
+    throw new Error('INVALID_PAYLOAD: Payload must be string or JSON object');
+  }
+
+  return { text, orderObj };
+}
+
+// ── RAW ESC/POS COMPILER ──────────────────────────────────────────────────────
+function compileEscpos(payload, paperWidth = '80mm') {
+  const norm = normalizePayload(payload);
   const chunks = [];
   const lineLength = paperWidth === '58mm' ? 32 : 48;
 
-  // ESC/POS Command Constants
   const ESC = 0x1B;
   const GS = 0x1D;
 
-  const INIT = Buffer.from([ESC, 0x40]);                     // Initialize printer
-  const CODE_PAGE = Buffer.from([ESC, 0x74, 0x00]);           // CP437 Character Set
-  const ALIGN_LEFT = Buffer.from([ESC, 0x61, 0x00]);          // Left align
-  const ALIGN_CENTER = Buffer.from([ESC, 0x61, 0x01]);        // Center align
-  const ALIGN_RIGHT = Buffer.from([ESC, 0x61, 0x02]);         // Right align
-  const BOLD_ON = Buffer.from([ESC, 0x45, 0x01]);             // Bold text on
-  const BOLD_OFF = Buffer.from([ESC, 0x45, 0x00]);            // Bold text off
-  const SIZE_NORMAL = Buffer.from([GS, 0x21, 0x00]);          // Normal text size
-  const SIZE_DOUBLE_HW = Buffer.from([GS, 0x21, 0x11]);       // Double width & height
-  const FEED_PAPER = Buffer.from([ESC, 0x64, 0x04]);          // Feed 4 lines before cut
-  const CUT_PAPER = Buffer.from([GS, 0x56, 0x01]);            // Partial cut command
+  const INIT = Buffer.from([ESC, 0x40]);
+  const CODE_PAGE = Buffer.from([ESC, 0x74, 0x00]); // CP437
+  const ALIGN_LEFT = Buffer.from([ESC, 0x61, 0x00]);
+  const ALIGN_CENTER = Buffer.from([ESC, 0x61, 0x01]);
+  const BOLD_ON = Buffer.from([ESC, 0x45, 0x01]);
+  const BOLD_OFF = Buffer.from([ESC, 0x45, 0x00]);
+  const SIZE_NORMAL = Buffer.from([GS, 0x21, 0x00]);
+  const SIZE_DOUBLE_HW = Buffer.from([GS, 0x21, 0x11]);
+  const FEED_PAPER = Buffer.from([ESC, 0x64, 0x04]);
+  const CUT_PAPER = Buffer.from([GS, 0x56, 0x01]);
 
   chunks.push(INIT);
   chunks.push(CODE_PAGE);
 
-  if (order) {
-    // ── JSON ORDER OBJECT COMPILE ──
+  if (norm.orderObj) {
+    const order = norm.orderObj;
     const center = (txt) => {
       chunks.push(ALIGN_CENTER);
       chunks.push(Buffer.from(txt + '\n', 'ascii'));
@@ -184,81 +192,63 @@ function compileEscpos(payload, paperWidth = '80mm') {
       chunks.push(Buffer.from(leftPart + ' '.repeat(Math.max(1, padding)) + right + '\n', 'ascii'));
     };
 
-    // Header Title
     chunks.push(SIZE_DOUBLE_HW, BOLD_ON);
-    center('KROWN ERP');
+    center('INTCORE POS');
     chunks.push(SIZE_NORMAL, BOLD_OFF);
 
-    center((order.branchName || 'Krown Kampala').toUpperCase());
-    center(order.branchAddress || order.branchLocation || order.location || 'Kampala, Uganda');
-    const branchPhone = order.branchPhone || '';
-    const branchTaxId = order.branchTaxId || '';
-    if (branchPhone) {
-      const telLine = branchTaxId ? `TEL: ${branchPhone} | TIN: ${branchTaxId}` : `TEL: ${branchPhone}`;
-      center(telLine);
-    } else if (branchTaxId) {
-      center(`TIN: ${branchTaxId}`);
-    }
-    
+    center((order.branchName || 'INTCORE RESTAURANT').toUpperCase());
+    center(order.branchAddress || order.branchLocation || 'Kampala, Uganda');
+    if (order.branchPhone) center(`TEL: ${order.branchPhone}`);
+
     chunks.push(ALIGN_LEFT);
     chunks.push(Buffer.from('='.repeat(lineLength) + '\n', 'ascii'));
 
-    // Ticket Type Header
     chunks.push(BOLD_ON, ALIGN_CENTER);
-    if (order.ticketType === 'prep' || order.isPrep) {
+    if (order.ticketType === 'prep' || order.isPrep || order.type === 'KITCHEN_TICKET') {
       center('*** KITCHEN ORDER TICKET ***');
-    } else if (order.ticketType === 'cashier_order') {
+    } else if (order.ticketType === 'cashier_order' || order.type === 'BILL') {
       center('*** CUSTOMER BILL - UNPAID ***');
     } else {
       center('*** OFFICIAL PAYMENT RECEIPT ***');
     }
     chunks.push(BOLD_OFF, ALIGN_LEFT);
 
-    // Metadata details
-    leftRight('ORDER NUMBER:', `#${(order.id || '').toUpperCase()}`);
-    leftRight('TABLE ID:', `${order.table || 'T1'}`);
-    leftRight('SEATING AREA:', `${order.place || 'Main Dining'}`);
-    leftRight('ORDER TYPE:', `${order.type || 'Dine In'}`);
+    leftRight('ORDER NUMBER:', `#${(order.id || '').toUpperCase().slice(-8)}`);
+    leftRight('TABLE:', `${order.table || 'T1'}`);
+    leftRight('TYPE:', `${order.type || 'Dine In'}`);
     leftRight('DATE / TIME:', new Date(order.createdAt || Date.now()).toLocaleString());
-    if (order.tinNumber) {
-      leftRight('CUSTOMER TIN:', order.tinNumber);
-    }
-    if (order.paymentMethod) {
-      leftRight('PAYMENT METHOD:', order.paymentMethod);
-    }
+    if (order.paymentMethod) leftRight('PAYMENT METHOD:', order.paymentMethod);
 
     chunks.push(Buffer.from('-'.repeat(lineLength) + '\n', 'ascii'));
-    leftRight('ITEM DESCRIPTION', 'PRICE');
+    leftRight('ITEM DESCRIPTION', order.type === 'KITCHEN_TICKET' ? 'QTY' : 'PRICE');
     chunks.push(Buffer.from('-'.repeat(lineLength) + '\n', 'ascii'));
 
-    // Cart Items loop
     if (order.items && Array.isArray(order.items)) {
       order.items.forEach(item => {
         const itemTitle = `${item.quantity}x ${item.name}`;
         const priceVal = ((item.price || 0) * item.quantity);
-        const priceStr = `USh ${priceVal.toLocaleString()}`;
+        const priceStr = order.type === 'KITCHEN_TICKET' ? `x${item.quantity}` : `USh ${priceVal.toLocaleString()}`;
         leftRight(itemTitle, priceStr);
-        if (item.note) {
+        if (item.note || item.notes) {
+          const noteText = item.note || item.notes;
           chunks.push(ALIGN_LEFT);
-          chunks.push(Buffer.from(`  * NOTE: ${item.note}\n`, 'ascii'));
+          chunks.push(Buffer.from(`   NOTE: ${noteText.toUpperCase()}\n`, 'ascii'));
         }
       });
     }
 
     chunks.push(Buffer.from('='.repeat(lineLength) + '\n', 'ascii'));
-    leftRight('TOTAL AMOUNT:', `USh ${(order.total || 0).toLocaleString()}`);
-    if (order.amountReceived) {
-      leftRight('CASH RECEIVED:', `USh ${Number(order.amountReceived).toLocaleString()}`);
+    if (order.type !== 'KITCHEN_TICKET') {
+      leftRight('TOTAL AMOUNT:', `USh ${(order.total || 0).toLocaleString()}`);
+      if (order.amountReceived) leftRight('CASH RECEIVED:', `USh ${Number(order.amountReceived).toLocaleString()}`);
+      if (order.changeAmount !== undefined) leftRight('CHANGE DUE:', `USh ${Number(order.changeAmount).toLocaleString()}`);
+      chunks.push(Buffer.from('='.repeat(lineLength) + '\n', 'ascii'));
     }
-    if (order.changeAmount !== undefined) {
-      leftRight('CHANGE DUE:', `USh ${Number(order.changeAmount).toLocaleString()}`);
-    }
-    chunks.push(Buffer.from('='.repeat(lineLength) + '\n', 'ascii'));
-    center('Powered by KROWN ERP');
+    center('Powered by INTCORE POS');
     chunks.push(Buffer.from('\n\n\n', 'ascii'));
   } else {
-    // ── PLAIN TEXT RECEIPT COMPILE ──
-    const cleanedText = payload
+    // Plain text compilation
+    const cleanedText = norm.text
       .replace(/[\u2018\u2019]/g, "'")
       .replace(/[\u201c\u201d]/g, '"')
       .replace(/[\u2013\u2014]/g, '-');
@@ -271,7 +261,6 @@ function compileEscpos(payload, paperWidth = '80mm') {
         return;
       }
 
-      // 1. Dividers
       if (trimmed.startsWith('-') || trimmed.startsWith('=')) {
         chunks.push(ALIGN_LEFT, SIZE_NORMAL, BOLD_OFF);
         const char = trimmed[0];
@@ -279,15 +268,13 @@ function compileEscpos(payload, paperWidth = '80mm') {
         return;
       }
 
-      // 2. Main Title (Double Size / Bold)
-      if (trimmed === 'KROWN ERP' || trimmed === 'INTCORE POS') {
+      if (trimmed === 'INTCORE POS' || trimmed === 'KROWN ERP') {
         chunks.push(ALIGN_CENTER, SIZE_DOUBLE_HW, BOLD_ON);
         chunks.push(Buffer.from(trimmed + '\n', 'ascii'));
         chunks.push(SIZE_NORMAL, BOLD_OFF);
         return;
       }
 
-      // 3. Section Titles (Bold / Center)
       if (trimmed.startsWith('***') && trimmed.endsWith('***')) {
         chunks.push(ALIGN_CENTER, SIZE_NORMAL, BOLD_ON);
         chunks.push(Buffer.from(trimmed + '\n', 'ascii'));
@@ -295,62 +282,54 @@ function compileEscpos(payload, paperWidth = '80mm') {
         return;
       }
 
-      // 4. Center-aligned Text checks
-      const leadingSpaces = line.length - line.trimStart().length;
-      const expectedPadding = Math.floor((lineLength - trimmed.length) / 2);
-
-      if (leadingSpaces > 0 && Math.abs(leadingSpaces - expectedPadding) <= 2) {
-        chunks.push(ALIGN_CENTER, SIZE_NORMAL);
-        const shouldBold = trimmed.includes('TOTAL DUE:') || trimmed.includes('TOTAL AMOUNT PAID:') || trimmed.includes('*** PAID') || trimmed.includes('*** CUSTOMER BILL');
-        if (shouldBold) chunks.push(BOLD_ON);
-        chunks.push(Buffer.from(trimmed + '\n', 'ascii'));
-        if (shouldBold) chunks.push(BOLD_OFF);
-      } else {
-        // 5. Left-aligned text
-        chunks.push(ALIGN_LEFT, SIZE_NORMAL);
-        const shouldBold = trimmed.includes('TOTAL DUE:') || trimmed.includes('TOTAL AMOUNT PAID:');
-        if (shouldBold) chunks.push(BOLD_ON);
-        chunks.push(Buffer.from(line + '\n', 'ascii'));
-        if (shouldBold) chunks.push(BOLD_OFF);
-      }
+      chunks.push(ALIGN_LEFT, SIZE_NORMAL);
+      const shouldBold = trimmed.includes('TOTAL:') || trimmed.includes('TOTAL AMOUNT:');
+      if (shouldBold) chunks.push(BOLD_ON);
+      chunks.push(Buffer.from(line + '\n', 'ascii'));
+      if (shouldBold) chunks.push(BOLD_OFF);
     });
   }
 
-  // Paper cut sequence
   chunks.push(FEED_PAPER);
   chunks.push(CUT_PAPER);
-  return Buffer.concat(chunks);
+
+  const finalBuffer = Buffer.concat(chunks);
+
+  if (!finalBuffer || finalBuffer.length < 20) {
+    throw new Error('EMPTY_PAYLOAD: ESC/POS buffer length is less than minimum 20 bytes threshold');
+  }
+
+  return finalBuffer;
 }
 
-// ── LOW-LEVEL PRINTER WRITER (TCP OR USB) ────────────────────────────────────
-function writeToPrinter(ip, port, escposBuffer, isUsb = false, rawTextPayload = '') {
+// ── PRINTER TRANSMISSION ENGINE (TCP FOR NETWORK / USB FOR CASHIER) ───────────
+function writeToPrinter(ip, port, escposBuffer, isUsb = false) {
+  if (!escposBuffer || !(escposBuffer instanceof Buffer) || escposBuffer.length < 20) {
+    return Promise.reject(new Error('EMPTY_PAYLOAD: Refusing to write empty buffer to printer'));
+  }
+
   if (isUsb) {
     return new Promise((resolve, reject) => {
       console.log(`[PRINT_AGENT] USB_WRITE_INITIATED for path: ${USB_PRINTER_PATH}`);
-      
-      const candidateShares = USB_PRINTER_PATH.startsWith('\\') 
+      const candidateShares = USB_PRINTER_PATH.startsWith('\\')
         ? [USB_PRINTER_PATH]
         : ['\\\\127.0.0.1\\Receiptprinter', '\\\\127.0.0.1\\Cashierr_01', '\\\\127.0.0.1\\ReceiptPrinter'];
 
       const tryShare = (index) => {
         if (index >= candidateShares.length) {
-          return reject(new Error(`All Windows printer shares failed (${candidateShares.join(', ')}). Check printer sharing.`));
+          return reject(new Error(`All USB printer shares failed (${candidateShares.join(', ')}). Check printer sharing.`));
         }
 
         const targetShare = candidateShares[index];
-        console.log(`[PRINT_AGENT] Attempting print to target share: ${targetShare}...`);
-
         fs.writeFile(targetShare, escposBuffer, (err) => {
           if (!err) {
-            console.log(`[PRINT_AGENT] ✓ Direct write to shared printer ${targetShare} successful.`);
+            console.log(`[PRINT_AGENT] ✓ Direct write to USB printer ${targetShare} successful.`);
             return resolve(true);
           }
 
           if (IS_WINDOWS) {
-            const timeId = Date.now();
-            const tmpBin = path.join(os.tmpdir(), `krown_bin_${timeId}.raw`);
+            const tmpBin = path.join(os.tmpdir(), `intcore_bin_${Date.now()}.raw`);
             fs.writeFileSync(tmpBin, escposBuffer);
-
             const cmdBin = `copy /b "${tmpBin}" "${targetShare}"`;
             exec(cmdBin, (execErr) => {
               fs.unlink(tmpBin, () => {});
@@ -358,7 +337,6 @@ function writeToPrinter(ip, port, escposBuffer, isUsb = false, rawTextPayload = 
                 console.log(`[PRINT_AGENT] ✓ Windows copy /b print successful to ${targetShare}.`);
                 return resolve(true);
               }
-              console.warn(`[PRINT_AGENT] Share ${targetShare} failed: ${execErr.message}. Trying next share...`);
               tryShare(index + 1);
             });
           } else {
@@ -366,52 +344,53 @@ function writeToPrinter(ip, port, escposBuffer, isUsb = false, rawTextPayload = 
           }
         });
       };
-
       tryShare(0);
     });
   }
 
+  // Pure TCP Socket for Network Ethernet Printer (Section 2 & 3 & 4)
   return new Promise((resolve, reject) => {
-    console.log(`[PRINT_AGENT] TCP_CONNECTION_INITIATED to ${ip}:${port}`);
-    const socket = net.createConnection({ host: ip, port }, () => {
-      console.log(`[PRINT_AGENT] Connection established. Sending ${escposBuffer.length} bytes.`);
-      socket.write(escposBuffer);
-      socket.end();
+    console.log(`[PRINT_AGENT] TCP_SOCKET_CONNECTING to Network Xprinter at ${ip}:${port}`);
+    const socket = net.createConnection({ host: ip, port: Number(port) }, () => {
+      console.log(`[PRINT_AGENT] TCP connected to ${ip}:${port}. Writing ${escposBuffer.length} ESC/POS bytes.`);
+      socket.write(escposBuffer, () => {
+        socket.end();
+      });
     });
-    
+
     socket.setTimeout(8000, () => {
       socket.destroy();
-      reject(new Error(`Connection timeout reaching printer at ${ip}:${port}`));
+      reject(new Error(`PRINTER_UNREACHABLE: Connection timeout reaching Network Xprinter at ${ip}:${port}`));
     });
-    
+
     socket.on('error', (err) => {
-      reject(new Error(`Socket error: ${err.message}`));
+      reject(new Error(`PRINTER_UNREACHABLE: Socket error at ${ip}:${port} (${err.message})`));
     });
-    
+
     socket.on('close', (hadError) => {
       if (!hadError) {
-        console.log('[PRINT_AGENT] Socket connection closed cleanly.');
+        console.log('[PRINT_AGENT] Network TCP print completed cleanly.');
         resolve(true);
       }
     });
   });
 }
 
-// ── CONNECTION CONNECTIVITY CHECKER ──────────────────────────────────────────
+// ── CONNECTION TESTER ──────────────────────────────────────────────────────────
 function testConnection(ip, port) {
   return new Promise((resolve) => {
-    const socket = net.createConnection({ host: ip, port }, () => {
+    const socket = net.createConnection({ host: ip, port: Number(port) }, () => {
       socket.end();
       resolve({ ok: true, status: 'CONNECTED' });
     });
-    
+
     socket.setTimeout(3000);
-    
+
     socket.on('timeout', () => {
       socket.destroy();
-      resolve({ ok: false, status: 'UNREACHABLE', error: 'TIMEOUT (Printer offline or bridge isolated)' });
+      resolve({ ok: false, status: 'UNREACHABLE', error: 'TIMEOUT (Printer offline or router unreachable)' });
     });
-    
+
     socket.on('error', (err) => {
       if (err.code === 'ECONNREFUSED') {
         resolve({ ok: false, status: 'PORT_CLOSED', error: 'TCP Port 9100 Refused Connection' });
@@ -422,7 +401,70 @@ function testConnection(ip, port) {
   });
 }
 
-// ── SUPABASE DATABASE QUEUE POLLER & LISTENER ─────────────────────────────────
+// ── ATOMIC JOB CLAIM & PROCESSING ─────────────────────────────────────────────
+async function claimJob(jobId) {
+  if (processingLock.has(jobId)) return false;
+  processingLock.add(jobId);
+
+  if (supabase) {
+    const { data, error } = await supabase
+      .from('print_jobs')
+      .update({ status: 'PRINTING', attempts: 1 })
+      .eq('id', jobId)
+      .in('status', ['QUEUED', 'pending'])
+      .select();
+
+    if (error || !data || data.length === 0) {
+      processingLock.delete(jobId);
+      return false;
+    }
+  } else {
+    await updateJobInRest(jobId, { status: 'PRINTING' });
+  }
+
+  return true;
+}
+
+async function processDatabaseJob(job) {
+  const claimed = await claimJob(job.id);
+  if (!claimed) return;
+
+  console.log(`[PRINT_AGENT] Claimed job ${job.id} from database. Type: ${job.type}`);
+
+  let isUsb = false;
+  let ip = KITCHEN_PRINTER_IP;
+  let port = KITCHEN_PRINTER_PORT;
+
+  if (job.printer_id === 'receipt' || (job.destination && job.destination.toLowerCase().includes('receipt'))) {
+    if (IS_RECEIPT_USB) {
+      isUsb = true;
+    }
+  }
+
+  try {
+    const escposBuffer = compileEscpos(job.payload);
+    await writeToPrinter(ip, port, escposBuffer, isUsb);
+
+    if (supabase) {
+      await supabase.from('print_jobs').update({ status: 'PRINTED', printed_at: Date.now(), last_error: null }).eq('id', job.id);
+    } else {
+      await updateJobInRest(job.id, { status: 'PRINTED', printed_at: Date.now(), last_error: null });
+    }
+
+    console.log(`[PRINT_AGENT] ✓ Job ${job.id} printed successfully.`);
+  } catch (err) {
+    console.error(`[PRINT_AGENT] ✗ Job ${job.id} failed:`, err.message);
+
+    if (supabase) {
+      await supabase.from('print_jobs').update({ status: 'FAILED', last_error: err.message }).eq('id', job.id);
+    } else {
+      await updateJobInRest(job.id, { status: 'FAILED', last_error: err.message });
+    }
+  } finally {
+    processingLock.delete(job.id);
+  }
+}
+
 async function pollDatabaseQueue() {
   if (!supabaseUrl || !supabaseKey) return;
   try {
@@ -439,7 +481,6 @@ async function pollDatabaseQueue() {
     }
 
     if (queuedJobs && queuedJobs.length > 0) {
-      console.log(`[PRINT_AGENT] Found ${queuedJobs.length} queued jobs in database.`);
       for (const job of queuedJobs) {
         await processDatabaseJob(job);
       }
@@ -449,151 +490,20 @@ async function pollDatabaseQueue() {
   }
 }
 
-async function processDatabaseJob(job) {
-  // Deduplication: skip if already being processed
-  if (processingLock.has(job.id)) {
-    console.log(`[PRINT_AGENT] Job ${job.id} already in progress, skipping duplicate.`);
-    return;
-  }
-  processingLock.add(job.id);
-  const attempts = (job.attempts || 0) + 1;
-  
-  // Set printing state in Supabase to lock against other daemon instances
-  if (supabase) {
-    await supabase.from('print_jobs').update({ status: 'PRINTING', attempts }).eq('id', job.id);
-  } else {
-    await updateJobInRest(job.id, { status: 'PRINTING', attempts });
-  }
-
-  console.log(`[PRINT_AGENT] Processing job ${job.id} from database. attempts: ${attempts}`);
-
-  // Resolve target static IP & Port, or USB connection
-  let isUsb = false;
-  let ip = KITCHEN_PRINTER_IP;
-  let port = KITCHEN_PRINTER_PORT;
-
-  if (job.printer_id === 'receipt' || (job.destination && job.destination.toLowerCase().includes('receipt'))) {
-    if (IS_RECEIPT_USB) {
-      isUsb = true;
-    } else {
-      ip = RECEIPT_PRINTER_IP;
-      port = RECEIPT_PRINTER_PORT;
-    }
-  }
-
-  try {
-    const escposBuffer = compileEscpos(job.payload);
-    await writeToPrinter(ip, port, escposBuffer, isUsb, job.payload);
-
-    // Success Status
-    if (supabase) {
-      await supabase.from('print_jobs').update({ status: 'PRINTED', printed_at: Date.now(), last_error: null }).eq('id', job.id);
-    } else {
-      await updateJobInRest(job.id, { status: 'PRINTED', printed_at: Date.now(), last_error: null });
-    }
-
-    console.log(`[PRINT_AGENT] ✓ Job ${job.id} printed and updated to printed.`);
-  } catch (err) {
-    console.error(`[PRINT_AGENT] ✗ Job ${job.id} failed:`, err.message);
-    
-    if (supabase) {
-      await supabase.from('print_jobs').update({ status: 'FAILED', last_error: err.message }).eq('id', job.id);
-    } else {
-      await updateJobInRest(job.id, { status: 'FAILED', last_error: err.message });
-    }
-  } finally {
-    processingLock.delete(job.id);
-  }
-}
-
 function startDatabaseQueueListener() {
-  if (!supabaseUrl || !supabaseKey) {
-    console.warn('[PRINT_AGENT] No Supabase credentials provided. Database queue listener skipped.');
-    return;
-  }
+  if (!supabaseUrl || !supabaseKey) return;
 
-  console.log('[PRINT_AGENT] Initializing database queue polling (every 2 seconds)...');
+  console.log('[PRINT_AGENT] Database queue polling started (every 2s)...');
   setInterval(pollDatabaseQueue, 2000);
-  pollDatabaseQueue(); // Initial check
-
-  if (supabase) {
-    console.log('[PRINT_AGENT] Subscribing to Supabase Realtime print_jobs...');
-    try {
-      supabase
-        .channel('print_jobs_sync')
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'print_jobs' }, async (payload) => {
-          const job = payload.new;
-          if (job && (job.status === 'QUEUED' || job.status === 'pending')) {
-            console.log(`[PRINT_AGENT] Realtime insert captured for job ${job.id}`);
-            processDatabaseJob(job).catch(e => console.error('[PRINT_AGENT] Realtime handling error:', e.message));
-          }
-        })
-        .subscribe((status) => {
-          console.log(`[PRINT_AGENT] Supabase realtime connection status: ${status}`);
-        });
-    } catch (err) {
-      console.warn('[PRINT_AGENT] Realtime exception:', err.message);
-    }
-  }
+  pollDatabaseQueue();
 }
 
-// ── HTTP CLIENT SERVER REQUEST HANDLER ───────────────────────────────────────
-async function processHttpClientJob(job) {
-  // Deduplication: if Supabase realtime also fires, skip it
-  if (processingLock.has(job.id)) {
-    console.log(`[PRINT_AGENT] HTTP job ${job.id} already being processed via DB queue, skipping.`);
-    return;
-  }
-  processingLock.add(job.id);
-  job.status = 'PRINTING';
-  job.attempts += 1;
-  console.log(`[PRINT_AGENT] Processing HTTP client job ${job.id} (Attempt ${job.attempts})`);
-
-  // Immediately mark as PRINTING in Supabase so DB queue poller skips it
-  if (supabase) {
-    supabase.from('print_jobs').update({ status: 'PRINTING' }).eq('id', job.id).then(() => {}).catch(() => {});
-  }
-  
-  const isUsb = IS_RECEIPT_USB && (job.type === 'CUSTOMER_RECEIPT' || job.type === 'BILL' || job.destination.toLowerCase().includes('receipt'));
-  
-  try {
-    const buffer = compileEscpos(job.payload);
-    if (!buffer || buffer.length <= 10) {
-      throw new Error('Invalid ESC/POS payload compiled.');
-    }
-    
-    await writeToPrinter(job.ip, job.port, buffer, isUsb, job.payload);
-    job.status = 'PRINTED';
-    job.printedAt = Date.now();
-    job.lastError = null;
-    console.log(`[PRINT_AGENT] HTTP client job ${job.id} printed successfully.`);
-    // Update Supabase to PRINTED so UI reflects success
-    if (supabase) {
-      supabase.from('print_jobs').update({ status: 'PRINTED', printed_at: Date.now() }).eq('id', job.id).then(() => {}).catch(() => {});
-    }
-  } catch (err) {
-    job.status = 'FAILED';
-    job.lastError = err.message;
-    console.error(`[PRINT_AGENT] HTTP client job ${job.id} failed: ${err.message}`);
-    // Leave as QUEUED so DB queue poller retries via Supabase
-    if (supabase) {
-      supabase.from('print_jobs').update({ status: 'QUEUED', last_error: err.message }).eq('id', job.id).then(() => {}).catch(() => {});
-    }
-  } finally {
-    processingLock.delete(job.id);
-  }
-}
-
+// ── LOCAL HTTP SERVER ──────────────────────────────────────────────────────────
 const server = http.createServer((req, res) => {
-  const origin = req.headers.origin;
-  if (origin && (origin.startsWith('http://localhost') || origin.startsWith('https://krown-restaurant-pos'))) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-  } else {
-    res.setHeader('Access-Control-Allow-Origin', 'http://localhost:3000');
-  }
-  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  const origin = req.headers.origin || '';
+  res.setHeader('Access-Control-Allow-Origin', origin.includes('vercel.app') || origin.includes('localhost') ? origin : 'http://localhost:3000');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -601,17 +511,9 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // GET /health
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, service: 'krown-print-bridge', localJobs: jobs.length, databaseConnected: !!supabase }));
-    return;
-  }
-
-  // GET /jobs
-  if (req.method === 'GET' && req.url === '/jobs') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(jobs));
+    res.end(JSON.stringify({ ok: true, agent: 'INTCORE Print Agent', kitchenIp: KITCHEN_PRINTER_IP, kitchenPort: KITCHEN_PRINTER_PORT }));
     return;
   }
 
@@ -622,89 +524,9 @@ const server = http.createServer((req, res) => {
     req.on('end', async () => {
       try {
         const { ip, port } = JSON.parse(body);
-        if (!ip || !port) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'ip and port fields are required' }));
-          return;
-        }
-        const result = await testConnection(ip, Number(port));
+        const result = await testConnection(ip || KITCHEN_PRINTER_IP, Number(port || KITCHEN_PRINTER_PORT));
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
-      } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: e.message }));
-      }
-    });
-    return;
-  }
-
-  // POST /print
-  if (req.method === 'POST' && req.url === '/print') {
-    let body = '';
-    req.on('data', c => body += c);
-    req.on('end', async () => {
-      try {
-        const parsed = JSON.parse(body);
-        const { id, orderId, type, text, ip, port } = parsed;
-        
-        if (!id || !type || !text || !ip || !port) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'id, type, text, ip, and port are required' }));
-          return;
-        }
-
-        let existingJob = jobs.find(j => j.id === id);
-        if (existingJob) {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: true, status: existingJob.status, isDuplicate: true }));
-          return;
-        }
-
-        const newJob = {
-          id,
-          orderId,
-          type,
-          destination: `${type} Printer (${ip}:${port})`,
-          payload: text,
-          ip,
-          port: Number(port),
-          status: 'QUEUED',
-          attempts: 0,
-          createdAt: Date.now(),
-          lastError: null,
-          printedAt: null
-        };
-        jobs.push(newJob);
-
-        processHttpClientJob(newJob);
-
-        res.writeHead(202, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, status: 'QUEUED', jobId: id }));
-      } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: e.message }));
-      }
-    });
-    return;
-  }
-
-  // POST /print/retry
-  if (req.method === 'POST' && req.url === '/print/retry') {
-    let body = '';
-    req.on('data', c => body += c);
-    req.on('end', async () => {
-      try {
-        const { id } = JSON.parse(body);
-        const job = jobs.find(j => j.id === id);
-        if (!job) {
-          res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'Job not found' }));
-          return;
-        }
-        
-        processHttpClientJob(job);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, status: 'PRINTING' }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: e.message }));
@@ -720,38 +542,75 @@ const server = http.createServer((req, res) => {
     req.on('end', async () => {
       try {
         const { ip, port } = JSON.parse(body);
-        if (!ip || !port) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'ip and port fields are required' }));
-          return;
-        }
-        
-        const testText = `
-================================
-        KROWN POS SYSTEM
-          PRINTER TEST
-================================
-Date: ${new Date().toLocaleString()}
-Status: Connection Verified
-Port: ${IS_RECEIPT_USB ? 'USB Raw /dev/usb/lp0' : `Raw TCP Socket ${port}`}
+        const targetIp = ip || KITCHEN_PRINTER_IP;
+        const targetPort = Number(port || KITCHEN_PRINTER_PORT);
 
-Format Verification:
-- Center alignments: Successful
-- Bold text alignments: Successful
-- Standard double size titles: Yes
+        const testPayload = {
+          type: 'KITCHEN_TICKET',
+          branchName: 'INTCORE POS',
+          branchAddress: 'Kampala, Uganda',
+          id: 'TEST-001',
+          table: 'TEST',
+          createdAt: Date.now(),
+          items: [
+            { name: 'PRINTER TEST', quantity: 1, price: 0, note: 'CONNECTION VERIFIED SUCCESSFUL' }
+          ]
+        };
 
-================================
-          TEST SUCCESS
-================================
-\n\n\n`;
-        const buffer = compileEscpos(testText);
-        const isUsb = IS_RECEIPT_USB && (ip.toLowerCase() === 'usb' || ip === '127.0.0.1' || Number(port) === 9101 || ip.includes('usb'));
-        await writeToPrinter(ip, Number(port), buffer, isUsb);
+        const escposBuffer = compileEscpos(testPayload);
+        await writeToPrinter(targetIp, targetPort, escposBuffer, false);
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, status: 'PRINTED' }));
       } catch (e) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // POST /print
+  if (req.method === 'POST' && req.url === '/print') {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', async () => {
+      try {
+        const parsed = JSON.parse(body);
+        const { id, type, payload, text, ip, port } = parsed;
+        const printPayload = payload || text;
+
+        if (!id || !type || !printPayload) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'id, type, and payload are required' }));
+          return;
+        }
+
+        const claimed = await claimJob(id);
+        if (!claimed) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, status: 'PRINTING', isDuplicate: true }));
+          return;
+        }
+
+        const targetIp = ip || KITCHEN_PRINTER_IP;
+        const targetPort = Number(port || KITCHEN_PRINTER_PORT);
+        const isUsb = IS_RECEIPT_USB && (type === 'CUSTOMER_RECEIPT' || type === 'BILL');
+
+        const escposBuffer = compileEscpos(printPayload);
+        await writeToPrinter(targetIp, targetPort, escposBuffer, isUsb);
+
+        if (supabase) {
+          await supabase.from('print_jobs').update({ status: 'PRINTED', printed_at: Date.now() }).eq('id', id);
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, status: 'PRINTED' }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      } finally {
+        if (req.body?.id) processingLock.delete(req.body.id);
       }
     });
     return;
@@ -761,8 +620,7 @@ Format Verification:
   res.end('Not Found');
 });
 
-// Start TCP listener
 server.listen(HTTP_PORT, '127.0.0.1', () => {
-  console.log(`KROWN Secure Print Bridge listening on http://127.0.0.1:${HTTP_PORT}`);
+  console.log(`INTCORE Production Print Agent listening on http://127.0.0.1:${HTTP_PORT}`);
   startDatabaseQueueListener();
 });
