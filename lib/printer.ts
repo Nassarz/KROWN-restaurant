@@ -295,79 +295,10 @@ export async function printTicket(
     status: 'QUEUED'
   });
 
-  // Network-first: send silently to the ethernet thermal printer via bridge
-  const sent = await sendToNetworkPrinter(formattedText, kind, jobId, order.id, dbType);
-  if (sent) {
-    console.log(`[PRINTER] Sent ${ticketType} to network printer via bridge.`);
-    return true;
-  }
-
-  // Fallback / Web-based printing: dynamic hidden iframe (works in Chrome, Edge, Firefox)
-  if (typeof window !== 'undefined') {
-    // Check if there is an existing print iframe and remove it
-    const existing = document.getElementById('krown-print-iframe');
-    if (existing && existing.parentNode) {
-      existing.parentNode.removeChild(existing);
-    }
-
-    const iframe = document.createElement('iframe');
-    iframe.id = 'krown-print-iframe';
-    iframe.style.position = 'fixed';
-    iframe.style.right = '0';
-    iframe.style.bottom = '0';
-    iframe.style.width = '0px';
-    iframe.style.height = '0px';
-    iframe.style.border = '0px';
-    iframe.style.opacity = '0';
-    iframe.style.pointerEvents = 'none';
-    document.body.appendChild(iframe);
-
-    const doc = iframe.contentWindow?.document || iframe.contentDocument;
-    if (doc) {
-      doc.open();
-      doc.write(`
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <title>Thermal Receipt - #${order.id} [${ticketType.toUpperCase()}]</title>
-            <style>
-              @page { size: ${paperWidth} auto; margin: 0; }
-              body {
-                font-family: 'Courier New', Courier, monospace;
-                width: ${paperWidth === '58mm' ? '58mm' : '80mm'};
-                padding: 10px;
-                margin: 0 auto;
-                font-size: ${paperWidth === '58mm' ? '11px' : '13px'};
-                line-height: 1.3;
-                color: #000;
-                white-space: pre-wrap;
-              }
-            </style>
-          </head>
-          <body>${formattedText.trimEnd() + '\n'}</body>
-        </html>
-      `);
-      doc.close();
-    }
-
-    setTimeout(() => {
-      try {
-        iframe.contentWindow?.focus();
-        iframe.contentWindow?.print();
-      } catch (e) {
-        console.warn('[PRINTER] Iframe print error:', e);
-      } finally {
-        setTimeout(() => {
-          if (iframe.parentNode) {
-            iframe.parentNode.removeChild(iframe);
-          }
-        }, 1500);
-      }
-    }, 250);
-
-    return true;
-  }
-  return false;
+  // Silent Background Print: send to print bridge daemon (Ethernet Kitchen 192.168.1.34 & Cashier USB)
+  await sendToNetworkPrinter(formattedText, kind, jobId, order.id, dbType);
+  console.log(`[PRINTER] Job ${jobId} (${ticketType}) enqueued for background daemon print.`);
+  return true;
 }
 
 /**

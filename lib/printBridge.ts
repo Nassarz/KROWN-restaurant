@@ -82,36 +82,23 @@ export async function sendToNetworkPrinter(
   const ip = kind === 'kitchen' ? cfg.kitchenIp : (cfg.receiptIp || cfg.kitchenIp);
   const printerPort = Number(kind === 'kitchen' ? cfg.kitchenPort : (cfg.receiptPort || cfg.kitchenPort || 9100));
 
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 1500);
+  // Silent fire-and-forget HTTP notification to daemon on 9101
+  fetch(`http://${host}:${port}/print`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id: jobId,
+      type,
+      destination: `${kind === 'kitchen' ? 'Kitchen' : 'Receipt'} Printer`,
+      printer_id: kind,
+      payload: text,
+      ip,
+      port: printerPort,
+    }),
+  }).catch(() => {});
 
-    const res = await fetch(`http://${host}:${port}/print`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-      body: JSON.stringify({
-        id: jobId,
-        type,
-        destination: `${kind === 'kitchen' ? 'Kitchen' : 'Receipt'} Printer`,
-        printer_id: kind,
-        payload: text,
-        ip,
-        port: printerPort,
-      }),
-    });
-    clearTimeout(timer);
-
-    if (res.ok) {
-      console.log(`[PrintBridge] Direct HTTP fast-path print delivered to bridge on port ${port}.`);
-      return true;
-    }
-  } catch (err) {
-    console.log(`[PrintBridge] Local bridge http://${host}:${port} unreachable. Enqueued in DB.`);
-  }
-
-  // If local daemon is not running on 9101, return false so printer.ts triggers browser print dialog fallback
-  return false;
+  console.log(`[PrintBridge] Job ${jobId} (${type}) enqueued in Supabase queue for background daemon.`);
+  return true;
 }
 
 
