@@ -12,6 +12,7 @@ import ManagerOrders from './manager-orders';
 import ManagerInventory from './manager-inventory';
 import ManagerReceipts from './manager-receipts';
 import ManagerStaff from './manager-staff';
+import ManagerAudit from './manager-audit';
 import AdminCompanies from './admin-companies';
 import AdminZones from './admin-zones';
 import GlobalSearchModal from './global-search-modal';
@@ -19,7 +20,7 @@ import { dataStore } from '@/lib/dataStore';
 import { formatUGX } from '@/lib/mockData';
 
 export default function ManagerPage({ user, setView }: { user: any, setView: (v: 'pos' | 'admin' | 'manager' | 'kitchen') => void }) {
-  const [activeTab, setActiveTab] = useState<'orders' | 'finance' | 'companies' | 'zones' | 'menu' | 'inventory' | 'staff' | 'receipts'>('orders');
+  const [activeTab, setActiveTab] = useState<'orders' | 'finance' | 'companies' | 'zones' | 'menu' | 'inventory' | 'staff' | 'receipts' | 'audit'>('orders');
   const [isDark, setIsDark] = useState(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('krown_theme');
@@ -233,6 +234,7 @@ export default function ManagerPage({ user, setView }: { user: any, setView: (v:
             { id: 'inventory', icon: Box, label: 'Inventory' },
             { id: 'staff', icon: Users, label: 'Staff' },
             { id: 'receipts', icon: Settings, label: 'Receipts & Cashier' },
+            { id: 'audit', icon: Shield, label: 'Security & Audit Logs' },
           ].map(tab => (
             <button
               key={tab.id}
@@ -426,6 +428,12 @@ export default function ManagerPage({ user, setView }: { user: any, setView: (v:
           {activeTab === 'receipts' && (
             <motion.div key="receipts" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="h-full overflow-y-auto">
               <ManagerReceipts orders={orders} />
+            </motion.div>
+          )}
+
+          {activeTab === 'audit' && (
+            <motion.div key="audit" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="h-full overflow-y-auto">
+              <ManagerAudit currentBranchId={managerBranchId} />
             </motion.div>
           )}
         </AnimatePresence>

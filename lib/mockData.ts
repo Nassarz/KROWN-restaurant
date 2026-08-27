@@ -9,10 +9,11 @@ export interface Product {
   id: string;
   name: string;
   price: number; // in UGX
-  category: 'pizza' | 'burger' | 'sushi' | 'drinks' | 'dessert' | 'local' | 'mains' | 'appetizers';
+  category: string;
   image: string;
   available: boolean;
   requiresKitchen?: boolean; // false for canned drinks, water, etc.
+  description?: string;
   branchId?: string;
   branchName?: string;
   recipe?: { ingredientId: string; quantity: number }[];
@@ -190,9 +191,14 @@ export interface Order {
 export interface AuditLog {
   id: string;
   userEmail: string;
+  userId?: string;
+  userName?: string;
+  role?: string;
   action: string;
+  section?: string;
+  pcInfo?: string;
   details: Record<string, any>;
-  ipAddress: string;
+  ipAddress?: string;
   timestamp: number;
   branchId?: string;
   branchName?: string;

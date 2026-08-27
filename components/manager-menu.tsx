@@ -57,6 +57,7 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
     name: '',
     price: '',
     category: 'mains',
+    description: '',
     image: '',
   });
   const [uploading, setUploading] = useState(false);
@@ -108,6 +109,7 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
         name: formData.name,
         price: parseFloat(formData.price),
         category: formData.category as any,
+        description: formData.description.trim() || undefined,
         image: formData.image || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80',
         branchId: managerBranchId ?? undefined,
         branchName: branchObj?.name ?? undefined,
@@ -131,7 +133,7 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
 
       setIsEditing(null);
       setIsAdding(false);
-      setFormData({ name: '', price: '', category: 'mains', image: '' });
+      setFormData({ name: '', price: '', category: 'mains', description: '', image: '' });
       setRecipe([]);
       setAddOns([]);
       vibrate([30, 50]);
@@ -148,6 +150,7 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
       name: product.name,
       price: product.price.toString(),
       category: product.category || '',
+      description: product.description || '',
       image: product.image || '',
     });
 
@@ -162,7 +165,7 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
 
   const openAdd = () => {
     setIsAdding(true);
-    setFormData({ name: '', price: '', category: 'mains', image: '' });
+    setFormData({ name: '', price: '', category: 'mains', description: '', image: '' });
     setRecipe([]);
     setAddOns([]);
   };
@@ -300,6 +303,16 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
                   <datalist id="categories-list">
                     {allCategories.map(cat => <option key={cat} value={cat} />)}
                   </datalist>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Description (Ingredients / Menu Details)</label>
+                  <textarea 
+                    rows={2}
+                    value={formData.description} 
+                    onChange={e => setFormData({...formData, description: e.target.value})} 
+                    placeholder="e.g. Chicken breast, lettuce, tomato, fried egg, served with side dish..."
+                    className="w-full border dark:border-white/10 rounded-xl p-3 bg-slate-50 dark:bg-black/20 dark:text-white text-xs focus:ring-2 focus:ring-orange-500 outline-none resize-none" 
+                  />
                 </div>
 
                 {/* Recipe Editor */}

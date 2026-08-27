@@ -296,7 +296,7 @@ export async function printTicket(
   });
 
   // Silent Background Print: send to print bridge daemon (Ethernet Kitchen 192.168.1.34 & Cashier USB)
-  await sendToNetworkPrinter(formattedText, kind, jobId, order.id, dbType);
+  await sendToNetworkPrinter(formattedText, kind, jobId, order.id, dbType, paperWidth);
   console.log(`[PRINTER] Job ${jobId} (${ticketType}) enqueued for background daemon print.`);
   return true;
 }

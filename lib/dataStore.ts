@@ -4,6 +4,7 @@ import {
 } from './mockData';
 import { supabase } from './supabase';
 import { queueOfflineOp, initAutoSync } from './sync';
+import { ensureMirabalBranchAndMenu } from './mirabalMenuSeed';
 
 type Listener = () => void;
 
@@ -183,6 +184,7 @@ function toDbProduct(p: Product): any {
     image: p.image,
     available: p.available,
     requires_kitchen: p.requiresKitchen ?? true,
+    description: p.description ?? null,
     branch_id: p.branchId ?? null,
     branch_name: p.branchName ?? null,
     linked_ingredient_id: p.linkedIngredientId ?? null,
@@ -201,6 +203,7 @@ function fromDbProduct(r: any): Product {
     image: r.image,
     available: r.available,
     requiresKitchen: r.requires_kitchen ?? true,
+    description: r.description,
     branchId: r.branch_id,
     branchName: r.branch_name,
     linkedIngredientId: r.linked_ingredient_id ?? undefined,
@@ -486,6 +489,39 @@ function fromDbMovement(r: any): InventoryMovement {
   };
 }
 
+function toDbAuditLog(l: AuditLog): any {
+  return {
+    id: l.id,
+    user_email: l.userEmail,
+    action: l.action,
+    details: l.details || {},
+    ip_address: l.ipAddress || l.pcInfo || '',
+    created_at: l.timestamp || Date.now(),
+    staff_id: l.userId || null,
+    branch_id: l.branchId || null,
+    branch_name: l.branchName || null,
+  };
+}
+
+function fromDbAuditLog(r: any): AuditLog {
+  const dt = r.details || {};
+  return {
+    id: r.id,
+    userEmail: r.user_email || dt.userEmail || dt.email || 'System',
+    userId: r.staff_id || r.user_id || dt.userId || dt.staffId,
+    userName: dt.userName || dt.name || (r.user_email ? r.user_email.split('@')[0] : 'Staff'),
+    role: dt.role || dt.staffRole,
+    action: r.action || 'ACTIVITY',
+    section: dt.section || dt.portal || 'System',
+    pcInfo: r.ip_address || dt.pcInfo || dt.device,
+    details: dt,
+    ipAddress: r.ip_address,
+    timestamp: r.created_at ? (typeof r.created_at === 'string' ? new Date(r.created_at).getTime() : Number(r.created_at)) : Date.now(),
+    branchId: r.branch_id || dt.branchId,
+    branchName: r.branch_name || dt.branchName || dt.branch,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 class DataStoreEngine {
@@ -552,6 +588,7 @@ class DataStoreEngine {
 
   private async initSupabase() {
     await this.fetchAll();
+    try { ensureMirabalBranchAndMenu(); } catch (e) { console.warn('Mirabal menu seed warning:', e); }
     this.subscribeRealtime();
   }
 
@@ -642,7 +679,7 @@ class DataStoreEngine {
       }
 
       if (auditLogs) {
-        this.auditLogs = auditLogs as AuditLog[];
+        this.auditLogs = auditLogs.map(fromDbAuditLog);
       }
 
       if (expenses) {
@@ -717,7 +754,7 @@ class DataStoreEngine {
         this.expenses = apply(this.expenses, fromDbExpense);
         break;
       case 'audit_logs':
-        this.auditLogs = apply(this.auditLogs, r => (r as AuditLog));
+        this.auditLogs = apply(this.auditLogs, fromDbAuditLog);
         break;
       case 'print_jobs':
         this.printJobs = apply(this.printJobs, fromDbPrintJob).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -756,7 +793,9 @@ class DataStoreEngine {
   // ── Scoped Getters (with optional branch & date filters) ───────────────────
   public getProducts(branchId?: string): Product[] {
     if (branchId && branchId !== 'all') {
-      return this.products.filter(p => p.branchId === branchId);
+      const b = this.branches.find(x => x.id === branchId || x.name.toLowerCase() === branchId.toLowerCase());
+      const targetId = b ? b.id : branchId;
+      return this.products.filter(p => p.branchId === targetId || (b && p.branchName && p.branchName.toLowerCase() === b.name.toLowerCase()));
     }
     return this.products;
   }
@@ -1000,6 +1039,15 @@ class DataStoreEngine {
 
 
   public getAuditLogs(branchId?: string): AuditLog[] {
+    if (branchId && branchId !== 'all') {
+      const branchObj = this.branches.find(b => b.id === branchId || b.name.toLowerCase() === branchId.toLowerCase());
+      const bName = branchObj ? branchObj.name.toLowerCase() : branchId.toLowerCase();
+      return this.auditLogs.filter(l =>
+        l.branchId === branchId ||
+        (l.branchName && l.branchName.toLowerCase() === bName) ||
+        (l.details && (l.details.branchId === branchId || (l.details.branch && String(l.details.branch).toLowerCase() === bName)))
+      );
+    }
     return this.auditLogs;
   }
 
@@ -1439,7 +1487,7 @@ class DataStoreEngine {
   // ── PRODUCTS ──────────────────────────────────────────────────────────────
   public addProduct(data: {
     name: string; price: number; category: any; image: string;
-    requiresKitchen?: boolean; branchId?: string; branchName?: string;
+    available?: boolean; requiresKitchen?: boolean; description?: string; branchId?: string; branchName?: string;
     deductFromInventory?: boolean; inventoryDeductAmount?: number;
     addOns?: ProductAddOn[];
   }): Product {
@@ -1448,8 +1496,9 @@ class DataStoreEngine {
       name: data.name, price: Number(data.price),
       category: data.category || 'mains',
       image: data.image || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80',
-      available: true,
+      available: data.available ?? true,
       requiresKitchen: data.requiresKitchen ?? true,
+      description: data.description,
       branchId: data.branchId,
       branchName: data.branchName,
       deductFromInventory: data.deductFromInventory ?? false,
@@ -1935,32 +1984,61 @@ class DataStoreEngine {
   }
 
   // ── AUDIT LOGS ────────────────────────────────────────────────────────────
-  public logAudit(userEmail: string, action: string, details: any, branchId?: string, branchName?: string) {
+  public logAudit(
+    userEmail: string,
+    action: string,
+    details: any,
+    branchId?: string,
+    branchName?: string,
+    section?: string,
+    pcInfo?: string
+  ) {
     const fallbackActorEmail = this.staff.some(s => s.email?.toLowerCase() === String(userEmail).toLowerCase())
       ? String(userEmail).toLowerCase()
       : '';
+
     const createLog = (actorEmail: string): { row: any; entry: AuditLog } => {
       const id = `log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      const staffRow = this.staff.find(s => s.email?.toLowerCase() === actorEmail.toLowerCase());
-      const row = {
-        id,
-        user_email: actorEmail ? actorEmail : null,
-        action,
-        details: details ?? {},
-        ip_address: branchName || '',
-        created_at: Date.now(),
-        staff_id: staffRow?.id ?? null,
+      const staffRow = this.staff.find(s => s.email?.toLowerCase() === actorEmail.toLowerCase() || s.id === userEmail);
+      
+      const bId = branchId || staffRow?.assignedBranchId || undefined;
+      const bName = branchName || staffRow?.branch || undefined;
+
+      const devicePlatform = typeof navigator !== 'undefined'
+        ? `${navigator.platform || 'PC'} (${navigator.userAgent.includes('Chrome') ? 'Chrome' : 'Browser'})`
+        : 'Windows PC';
+
+      const pc = pcInfo || details?.pcInfo || devicePlatform;
+      const sec = section || details?.section || 'System';
+
+      const enrichedDetails = {
+        ...(details || {}),
+        userId: staffRow?.id,
+        userName: staffRow?.name,
+        role: staffRow?.role,
+        branchId: bId,
+        branchName: bName,
+        section: sec,
+        pcInfo: pc,
       };
+
       const entry: AuditLog = {
         id,
-        userEmail: actorEmail || userEmail,
+        userEmail: actorEmail || staffRow?.email || userEmail || 'System',
+        userId: staffRow?.id,
+        userName: staffRow?.name,
+        role: staffRow?.role,
         action,
-        details: details ?? {},
-        ipAddress: branchName || '',
-        timestamp: row.created_at,
-        branchId,
-        branchName,
+        section: sec,
+        pcInfo: pc,
+        details: enrichedDetails,
+        ipAddress: pc,
+        timestamp: Date.now(),
+        branchId: bId,
+        branchName: bName,
       };
+
+      const row = toDbAuditLog(entry);
       return { row, entry };
     };
 

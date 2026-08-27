@@ -208,9 +208,7 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
         if (existingOpen) {
           const updated = dataStore.addItemsToOrder(existingOpen.id, cart);
           if (updated) {
-            if (updated.type !== 'Dine In') {
-              autoPrintKitchenTicket(updated);
-            }
+            autoPrintKitchenTicket(updated);
             vibrate([50, 100, 50]);
             setOrderConfirmation({ ...updated, appendedToExisting: true, existingOrderId: existingOpen.id });
             setCart([]);
@@ -626,6 +624,9 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
                         </div>
                         <div className="mt-auto w-full flex flex-col items-start text-left">
                           <h3 className="font-bold text-slate-900 dark:text-white text-lg leading-tight mb-1 line-clamp-2">{product.name}</h3>
+                          {product.description && (
+                            <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2 mb-2 leading-relaxed font-normal">{product.description}</p>
+                          )}
                           <div className="flex w-full items-center justify-between mt-2">
                             <div>
                               <p className="text-orange-500 font-bold text-base leading-none">{formatUGX(product.price)}</p>

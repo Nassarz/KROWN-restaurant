@@ -77,7 +77,8 @@ export async function sendToNetworkPrinter(
   kind: 'kitchen' | 'receipt',
   jobId: string,
   orderId: string,
-  type: 'KITCHEN_TICKET' | 'BILL' | 'CUSTOMER_RECEIPT'
+  type: 'KITCHEN_TICKET' | 'BILL' | 'CUSTOMER_RECEIPT',
+  paperWidth: '80mm' | '58mm' = '80mm'
 ): Promise<boolean> {
   const cfg = getPrinterConfig();
   const host = cfg.bridgeHost || '127.0.0.1';
@@ -85,23 +86,34 @@ export async function sendToNetworkPrinter(
   const ip = kind === 'kitchen' ? (cfg.kitchenIp || '192.168.1.34') : (cfg.receiptIp || '127.0.0.1');
   const printerPort = Number(kind === 'kitchen' ? (cfg.kitchenPort || 9100) : (cfg.receiptPort || 9100));
 
-  // Silent fire-and-forget HTTP notification to daemon on 9101
-  fetch(`http://${host}:${port}/print`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      id: jobId,
-      type,
-      destination: `${kind === 'kitchen' ? 'Kitchen' : 'Receipt'} Printer`,
-      printer_id: kind,
-      payload: text,
-      ip,
-      port: printerPort,
-    }),
-  }).catch(() => {});
-
-  console.log(`[PrintBridge] Job ${jobId} (${type}) enqueued in Supabase queue for background daemon.`);
-  return true;
+  try {
+    const res = await fetch(`http://${host}:${port}/print`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: jobId,
+        type,
+        destination: `${kind === 'kitchen' ? 'Kitchen' : 'Receipt'} Printer`,
+        printer_id: kind,
+        payload: text,
+        ip,
+        port: printerPort,
+        paperWidth,
+      }),
+    });
+    if (!res.ok) {
+      const errBody = await res.text();
+      console.error(`[PrintBridge] Job ${jobId} bridge returned ${res.status}: ${errBody}`);
+      dataStore.updatePrintJobStatus(jobId, 'FAILED', { lastError: `Bridge returned ${res.status}`, attempts: 1 });
+      return false;
+    }
+    console.log(`[PrintBridge] Job ${jobId} (${type}) sent to bridge.`);
+    return true;
+  } catch (err: any) {
+    console.error(`[PrintBridge] Job ${jobId} bridge unreachable: ${err.message}`);
+    dataStore.updatePrintJobStatus(jobId, 'FAILED', { lastError: `Bridge offline: ${err.message}`, attempts: 1 });
+    return false;
+  }
 }
 
 export async function retryNetworkPrintJob(jobId: string): Promise<boolean> {
@@ -156,7 +168,7 @@ export async function testNetworkPrinter(target: string = 'kitchen', port: numbe
   return false;
 }
 
-export async function sendTestPrintTicket(ip: string, port: number = 9100): Promise<{ ok: boolean; status: string; error?: string }> {
+export async function sendTestPrintTicket(ip: string, port: number = 9100, target?: 'kitchen' | 'receipt'): Promise<{ ok: boolean; status: string; error?: string }> {
   const cfg = getPrinterConfig();
   const host = cfg.bridgeHost || '127.0.0.1';
   const bridgePort = cfg.bridgePort || 9101;
@@ -165,7 +177,7 @@ export async function sendTestPrintTicket(ip: string, port: number = 9100): Prom
     const res = await fetch(`http://${host}:${bridgePort}/print/test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ip, port })
+      body: JSON.stringify({ ip, port, target })
     });
     if (res.ok) {
       return await res.json();

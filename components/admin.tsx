@@ -10,6 +10,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, 
 import ManagerMenu from './manager-menu';
 import ManagerInventory from './manager-inventory';
 import ManagerStaff from './manager-staff';
+import ManagerAudit from './manager-audit';
 import AdminBranches from './admin-branches';
 import AdminCompanies from './admin-companies';
 import AdminZones from './admin-zones';
@@ -483,26 +484,7 @@ export default function AdminPage({ user, setView }: { user: any, setView: (v: '
           {/* 3. AUDIT & SECURITY */}
           {activeTab === 'audit' && (
             <motion.div key="audit" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="flex flex-col h-full gap-6 flex-1">
-              <h2 className="text-3xl font-bold text-slate-900 dark:text-white tracking-tight">Security & Audit Logs</h2>
-              <div className="bg-white/80 dark:bg-[#121214]/80 backdrop-blur-2xl border border-white/40 dark:border-white/5 shadow-2xl rounded-[2rem] p-6 ring-1 ring-black/5 dark:ring-white/10 flex-1 overflow-hidden flex flex-col">
-                <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-4">
-                  {auditLogs.map(log => (
-                    <div key={log.id} className="bg-slate-50 dark:bg-black/20 p-4 rounded-2xl border border-black/5 dark:border-white/5 flex flex-col gap-1">
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-sm text-slate-900 dark:text-white">{log.action}</span>
-                        <span className="text-[10px] text-slate-400 font-medium">{new Date(log.timestamp).toLocaleString()}</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs text-orange-600 dark:text-orange-400 font-medium truncate">{log.userEmail}</p>
-                        {log.ipAddress && <span className="text-[10px] text-slate-400 font-mono">IP: {log.ipAddress}</span>}
-                      </div>
-                      <pre className="text-[10px] text-slate-500 mt-1 overflow-hidden whitespace-pre-wrap font-mono">
-                        {JSON.stringify(log.details, null, 2)}
-                      </pre>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <ManagerAudit currentBranchId={selectedBranchId} />
             </motion.div>
           )}
 
