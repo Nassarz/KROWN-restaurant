@@ -312,8 +312,8 @@ function writeToPrinter(ip, port, escposBuffer, isUsb = false) {
     return new Promise((resolve, reject) => {
       console.log(`[PRINT_AGENT] USB_WRITE_INITIATED for path: ${USB_PRINTER_PATH}`);
       const candidateShares = USB_PRINTER_PATH.startsWith('\\')
-        ? [USB_PRINTER_PATH]
-        : ['\\\\127.0.0.1\\Receiptprinter', '\\\\127.0.0.1\\Cashierr_01', '\\\\127.0.0.1\\ReceiptPrinter'];
+        ? [USB_PRINTER_PATH, '\\\\127.0.0.1\\Receipt', '\\\\127.0.0.1\\Cashierr_01', '\\\\127.0.0.1\\Receiptprinter']
+        : ['\\\\127.0.0.1\\Receipt', '\\\\127.0.0.1\\Cashierr_01', '\\\\127.0.0.1\\Receiptprinter', '\\\\127.0.0.1\\ReceiptPrinter'];
 
       const tryShare = (index) => {
         if (index >= candidateShares.length) {
@@ -500,8 +500,7 @@ function startDatabaseQueueListener() {
 
 // ── LOCAL HTTP SERVER ──────────────────────────────────────────────────────────
 const server = http.createServer((req, res) => {
-  const origin = req.headers.origin || '';
-  res.setHeader('Access-Control-Allow-Origin', origin.includes('vercel.app') || origin.includes('localhost') ? origin : 'http://localhost:3000');
+  res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
@@ -610,7 +609,7 @@ const server = http.createServer((req, res) => {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: e.message }));
       } finally {
-        if (req.body?.id) processingLock.delete(req.body.id);
+        if (parsed?.id) processingLock.delete(parsed.id);
       }
     });
     return;
