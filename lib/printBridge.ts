@@ -18,22 +18,25 @@ export interface PrinterBridgeConfig {
 const CONFIG_KEY = 'krown_printer_bridge_config';
 
 export function getPrinterConfig(): PrinterBridgeConfig {
+  const defaultConfig: PrinterBridgeConfig = {
+    enabled: true,
+    bridgeHost: '127.0.0.1',
+    bridgePort: 9101,
+    kitchenIp: '192.168.1.34',
+    kitchenPort: 9100,
+    receiptIp: '127.0.0.1',
+    receiptPort: 9100,
+    paperWidth: '80mm',
+  };
+
   if (typeof window === 'undefined') {
-    return {
-      enabled: false, bridgeHost: '127.0.0.1', bridgePort: 9101,
-      kitchenIp: '192.168.1.100', kitchenPort: 9100,
-      receiptIp: '192.168.1.101', receiptPort: 9100, paperWidth: '80mm',
-    };
+    return defaultConfig;
   }
   try {
     const raw = localStorage.getItem(CONFIG_KEY);
-    if (raw) return { ...getPrinterConfig(), ...JSON.parse(raw) };
+    if (raw) return { ...defaultConfig, ...JSON.parse(raw) };
   } catch { /* ignore */ }
-  return {
-    enabled: false, bridgeHost: '127.0.0.1', bridgePort: 9101,
-    kitchenIp: '192.168.1.100', kitchenPort: 9100,
-    receiptIp: '192.168.1.101', receiptPort: 9100, paperWidth: '80mm',
-  };
+  return defaultConfig;
 }
 
 export function setPrinterConfig(cfg: Partial<PrinterBridgeConfig>) {
@@ -79,8 +82,8 @@ export async function sendToNetworkPrinter(
   const cfg = getPrinterConfig();
   const host = cfg.bridgeHost || '127.0.0.1';
   const port = cfg.bridgePort || 9101;
-  const ip = kind === 'kitchen' ? cfg.kitchenIp : (cfg.receiptIp || cfg.kitchenIp);
-  const printerPort = Number(kind === 'kitchen' ? cfg.kitchenPort : (cfg.receiptPort || cfg.kitchenPort || 9100));
+  const ip = kind === 'kitchen' ? (cfg.kitchenIp || '192.168.1.34') : (cfg.receiptIp || '127.0.0.1');
+  const printerPort = Number(kind === 'kitchen' ? (cfg.kitchenPort || 9100) : (cfg.receiptPort || 9100));
 
   // Silent fire-and-forget HTTP notification to daemon on 9101
   fetch(`http://${host}:${port}/print`, {
@@ -114,26 +117,28 @@ export async function retryNetworkPrintJob(jobId: string): Promise<boolean> {
   return true;
 }
 
-
 export async function testNetworkPrinter(target: string = 'kitchen', port: number = 9100): Promise<boolean> {
   const cfg = getPrinterConfig();
   const host = cfg.bridgeHost || '127.0.0.1';
   const bridgePort = cfg.bridgePort || 9101;
 
-  let targetIp = target;
-  let targetPort = port;
-
-  if (target === 'kitchen') {
-    targetIp = cfg.kitchenIp || '192.168.1.34';
-    targetPort = cfg.kitchenPort || 9100;
-  } else if (target === 'receipt') {
-    targetIp = cfg.receiptIp || '127.0.0.1';
-    targetPort = cfg.receiptPort || 9100;
+  if (target === 'receipt') {
+    // Cashier USB Receipt Printer: check local agent health
+    try {
+      const res = await fetch(`http://${host}:${bridgePort}/health`);
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
+
+  // Kitchen Printer: test TCP socket to 192.168.1.34:9100
+  const targetIp = target === 'kitchen' ? (cfg.kitchenIp || '192.168.1.34') : target;
+  const targetPort = target === 'kitchen' ? (cfg.kitchenPort || 9100) : port;
 
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2000);
+    const timer = setTimeout(() => controller.abort(), 2500);
     const res = await fetch(`http://${host}:${bridgePort}/printers/test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
