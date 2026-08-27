@@ -366,7 +366,7 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
                               className="w-full text-left px-3 py-2 rounded-xl text-xs font-bold text-orange-500 hover:bg-orange-500/10 flex items-center gap-2 border border-dashed border-orange-500/30"
                             >
                               <Plus className="w-4 h-4 shrink-0" />
-                              <span>Create "{catSearchText.trim()}"</span>
+                              <span>Create &quot;{catSearchText.trim()}&quot;</span>
                             </button>
                           )}
                         </div>
