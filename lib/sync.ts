@@ -134,12 +134,10 @@ export async function syncOfflineQueue(): Promise<{ synced: number; failed: numb
         synced++;
         console.log(`[OfflineSync] ✓ Synced op: ${op.table} ${op.method}`);
       } else {
-        // Increment retry count
         const newRetries = (op.retries || 0) + 1;
-        // Remove ops that have failed too many times (3 retries = likely permanent error like FK constraint)
-        if (newRetries >= 3) {
+        if (newRetries >= 2 || error.code === '23505' || error.message?.includes('duplicate') || error.message?.includes('violates')) {
           await db.delete(QUEUE_STORE, op.id!);
-          console.warn(`[OfflineSync] ✗ Dropping op after ${newRetries} retries (${error.message}): ${op.table} ${op.method}`);
+          console.warn(`[OfflineSync] ✗ Cleared op after retry/conflict (${error.message}): ${op.table} ${op.method}`);
         } else {
           await db.put(QUEUE_STORE, { ...op, retries: newRetries });
         }

@@ -46,6 +46,7 @@ export interface StaffMember {
   name: string;
   email: string;
   phone?: string;
+  pinCode?: string; // 4-digit PIN lock code
   idType?: 'National ID' | 'Passport' | 'Student ID';
   idNumber?: string;
   role: 'Super Admin' | 'Branch Manager' | 'Head Chef' | 'Senior Waiter' | 'Cashier' | 'Kitchen Staff';

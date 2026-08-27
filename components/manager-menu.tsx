@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Plus, Edit3, Image as ImageIcon, Loader2, Trash2, X } from 'lucide-react';
+import { Search, Plus, Edit3, Image as ImageIcon, Loader2, Trash2, X, ChevronDown, Check } from 'lucide-react';
 import { vibrate, getCategoryIcon } from '@/lib/utils';
 import { formatUGX } from '@/lib/mockData';
 import { dataStore } from '@/lib/dataStore';
@@ -10,6 +10,10 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
   const [isEditing, setIsEditing] = useState<any | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Searchable Category Dropdown State
+  const [isCatDropdownOpen, setIsCatDropdownOpen] = useState(false);
+  const [catSearchText, setCatSearchText] = useState('');
 
   // Compute current manager's branch scope (overridden by admin's branch selector)
   const activeStaff = dataStore.getStaff().find(s => s.email === user?.email);
@@ -37,6 +41,11 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
     const fromProducts = displayProducts.map(p => (p.category || 'Mains').trim());
     return Array.from(new Set([...fromProducts, ...customCats])).filter(Boolean);
   }, [displayProducts, customCats]);
+
+  const filteredCategoriesList = useMemo(() => {
+    if (!catSearchText.trim()) return allCategories;
+    return allCategories.filter(c => c.toLowerCase().includes(catSearchText.trim().toLowerCase()));
+  }, [allCategories, catSearchText]);
 
   const handleAddCat = (e: React.FormEvent) => {
     e.preventDefault();
@@ -291,18 +300,79 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Price (UGX) *</label>
                   <input required type="number" step="0.01" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} className="w-full border dark:border-white/10 rounded-xl p-3 bg-slate-50 dark:bg-black/20 dark:text-white font-bold text-sm focus:ring-2 focus:ring-orange-500 outline-none" />
                 </div>
-                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Category</label>
-                  <input 
-                    required 
-                    list="categories-list"
-                    value={formData.category} 
-                    onChange={e => setFormData({...formData, category: e.target.value})} 
-                    className="w-full border dark:border-white/10 rounded-xl p-3 bg-slate-50 dark:bg-black/20 dark:text-white text-sm focus:ring-2 focus:ring-orange-500 outline-none" 
-                  />
-                  <datalist id="categories-list">
-                    {allCategories.map(cat => <option key={cat} value={cat} />)}
-                  </datalist>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Category *</label>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setIsCatDropdownOpen(!isCatDropdownOpen)}
+                      className="w-full border dark:border-white/10 rounded-xl p-3 bg-slate-50 dark:bg-black/20 text-slate-900 dark:text-white text-sm font-bold flex items-center justify-between focus:ring-2 focus:ring-orange-500 outline-none text-left"
+                    >
+                      <span className="flex items-center gap-2 truncate">
+                        <span className="text-base">{getCategoryIcon(formData.category || 'Mains')}</span>
+                        <span>{formData.category || 'Select Category...'}</span>
+                      </span>
+                      <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                    </button>
+
+                    {isCatDropdownOpen && (
+                      <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-[#1A1A1E] border border-black/10 dark:border-white/10 rounded-2xl shadow-2xl z-50 p-2 space-y-2 max-h-60 flex flex-col">
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                          <input
+                            type="text"
+                            autoFocus
+                            placeholder="Search or filter categories..."
+                            value={catSearchText}
+                            onChange={e => setCatSearchText(e.target.value)}
+                            className="w-full bg-slate-100 dark:bg-black/40 border border-black/5 dark:border-white/10 rounded-xl py-2 pl-9 pr-3 text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                          />
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto custom-scrollbar space-y-1 pr-1">
+                          {filteredCategoriesList.map(cat => (
+                            <button
+                              key={cat}
+                              type="button"
+                              onClick={() => {
+                                setFormData(prev => ({ ...prev, category: cat }));
+                                setIsCatDropdownOpen(false);
+                                setCatSearchText('');
+                              }}
+                              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-between transition-colors ${
+                                formData.category === cat
+                                  ? 'bg-orange-500 text-white'
+                                  : 'hover:bg-slate-100 dark:hover:bg-white/10 text-slate-700 dark:text-slate-200'
+                              }`}
+                            >
+                              <span className="flex items-center gap-2">
+                                <span>{getCategoryIcon(cat)}</span>
+                                <span>{cat}</span>
+                              </span>
+                              {formData.category === cat && <Check className="w-4 h-4 shrink-0" />}
+                            </button>
+                          ))}
+
+                          {catSearchText.trim() && !filteredCategoriesList.some(c => c.toLowerCase() === catSearchText.trim().toLowerCase()) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const newCat = catSearchText.trim();
+                                dataStore.addCustomCategory(newCat);
+                                setFormData(prev => ({ ...prev, category: newCat }));
+                                setIsCatDropdownOpen(false);
+                                setCatSearchText('');
+                              }}
+                              className="w-full text-left px-3 py-2 rounded-xl text-xs font-bold text-orange-500 hover:bg-orange-500/10 flex items-center gap-2 border border-dashed border-orange-500/30"
+                            >
+                              <Plus className="w-4 h-4 shrink-0" />
+                              <span>Create "{catSearchText.trim()}"</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Description (Ingredients / Menu Details)</label>

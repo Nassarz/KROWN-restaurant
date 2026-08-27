@@ -329,6 +329,7 @@ function toDbStaff(s: StaffMember): any {
     status: s.status,
     avatar: s.avatar,
     phone: s.phone ?? null,
+    pin_code: s.pinCode ?? null,
     id_type: s.idType ?? null,
     id_number: s.idNumber ?? null,
     assigned_branch_id: s.assignedBranchId ?? null,
@@ -341,6 +342,7 @@ function fromDbStaff(r: any): StaffMember {
     name: r.name,
     email: r.email,
     phone: r.phone,
+    pinCode: r.pin_code || r.pinCode,
     idType: r.id_type,
     idNumber: r.id_number,
     role: r.role,
@@ -1494,6 +1496,24 @@ class DataStoreEngine {
     this.logAudit('Cashier', 'SPLIT_PAY_ORDER', { orderId, splitIndex: split.splitIndex, amount: split.amount });
     this.save();
     return targetOrder;
+  }
+
+  /** Clear all sales, orders, and receipts for a specific branch */
+  public clearBranchSales(branchId: string, branchName?: string) {
+    const bName = branchName?.toLowerCase() || 'mirabal';
+    this.orders = this.orders.filter(o => o.branchId !== branchId && o.branchName?.toLowerCase() !== bName);
+    this.printJobs = this.printJobs.filter(pj => pj.branchId !== branchId && pj.branchName?.toLowerCase() !== bName);
+
+    this.branches = this.branches.map(b => {
+      if (b.id === branchId || b.name.toLowerCase() === bName) {
+        return { ...b, dailyRevenueUGX: 0, ordersToday: 0 };
+      }
+      return b;
+    });
+
+    this.save();
+    safeWrite('orders', 'delete', { where: { branch_id: branchId } });
+    safeWrite('print_jobs', 'delete', { where: { branch_id: branchId } });
   }
 
   // ── PRODUCTS ──────────────────────────────────────────────────────────────

@@ -31,6 +31,8 @@ export default function AppRouter() {
   // Auth Form State
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [pin, setPin] = useState('');
+  const [loginMode, setLoginMode] = useState<'password' | 'pin'>('password');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
 
@@ -89,7 +91,6 @@ export default function AppRouter() {
         }
 
         if (!dbStaff) {
-          // OFFLINE: Supabase unreachable — restore from the local offline cache
           dbStaff = getCachedOfflineProfile(authUser.email || '');
         }
 
@@ -109,7 +110,7 @@ export default function AppRouter() {
           // Auto-route on session restore
           if (staff.role === 'Super Admin') setView('admin');
           else if (staff.role === 'Branch Manager') setView('manager');
-          else if (staff.role === 'Cashier') setView('pos'); // Cashier goes straight to POS / Table Management
+          else if (staff.role === 'Cashier') setView('pos');
           else if (staff.role === 'Head Chef' || staff.role === 'Kitchen Staff') setView('kitchen');
           else setView('pos');
         }
@@ -120,15 +121,16 @@ export default function AppRouter() {
       }
     };
 
-    // Check existing session on mount (Enforce Auto-Logout on Browser/Tab Close or Shutdown)
     const isTabSessionActive = typeof window !== 'undefined' && sessionStorage.getItem('krown_active_session') === 'true';
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session && !isTabSessionActive) {
-        // Browser or tab was closed/reopened or machine restarted -> Auto Log Out
         supabase.auth.signOut().then(() => {
           setUser(null);
           setActiveStaff(null);
+          setEmail('');
+          setPassword('');
+          setPin('');
           setView('pos');
           setLoading(false);
         });
@@ -137,32 +139,33 @@ export default function AppRouter() {
       }
     });
 
-    // Listen for auth changes (login/logout from other tabs)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
         setUser(null);
         setActiveStaff(null);
+        setEmail('');
+        setPassword('');
+        setPin('');
+        setLoginError(null);
+        if (typeof window !== 'undefined') {
+          sessionStorage.removeItem('krown_active_session');
+        }
         setView('pos');
         setLoading(false);
       }
-      // Don't re-run on SIGNED_IN — login handler already handles it
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-
-
   const handleNavigateWithAuth = (targetView: 'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier') => {
     const role = activeStaff?.role;
 
-    // Super Admin has unrestricted access to all dashboards
     if (role === 'Super Admin') {
       setView(targetView);
       return;
     }
 
-    // Branch Manager has full seamless access to Manager, POS, Cashier, Kitchen without auth prompts
     if (role === 'Branch Manager') {
       if (targetView === 'admin') {
         alert('Access Denied: Branch Managers cannot access Super Admin Global HQ Settings.');
@@ -172,7 +175,6 @@ export default function AppRouter() {
       return;
     }
 
-    // Cashier has full seamless access to POS (Table Management) and Cashier Portal without auth prompts
     if (role === 'Cashier') {
       if (targetView === 'admin' || targetView === 'manager') {
         alert('Access Denied: Cashier accounts cannot access Manager or Admin dashboards.');
@@ -182,7 +184,6 @@ export default function AppRouter() {
       return;
     }
 
-    // Role-Level Access Validation Policy (RLS Guard)
     if (role === 'Senior Waiter' && targetView !== 'pos') {
       alert('Access Denied: POS Waiter accounts are restricted to POS view.');
       return;
@@ -196,8 +197,76 @@ export default function AppRouter() {
     setView(targetView);
   };
 
+  const handleGoogleSignIn = async () => {
+    setIsSubmitting(true);
+    setLoginError(null);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
+        }
+      });
+      if (error) setLoginError(error.message);
+    } catch (err: any) {
+      setLoginError(err?.message || 'Google Sign-In failed.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handlePinLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pin || pin.length < 4) {
+      setLoginError('Please enter a 4-digit PIN code.');
+      return;
+    }
+    setIsSubmitting(true);
+    setLoginError(null);
+
+    const allStaff = dataStore.getStaff();
+    const matched = allStaff.find(s => (s.pinCode && s.pinCode === pin) || (s.id && s.id.endsWith(pin)));
+
+    if (matched) {
+      const staff: StaffMember = matched;
+      setUser({ uid: staff.id, displayName: staff.name, email: staff.email, photoURL: staff.avatar });
+      setActiveStaff(staff);
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('krown_active_session', 'true');
+      }
+
+      dataStore.logAudit(
+        staff.email,
+        'LOGIN',
+        { method: 'PIN_CODE', staffId: staff.id, role: staff.role },
+        staff.assignedBranchId || undefined,
+        staff.branch || undefined,
+        'PIN Login'
+      );
+
+      if (staff.role === 'Super Admin') setView('admin');
+      else if (staff.role === 'Branch Manager') setView('manager');
+      else if (staff.role === 'Cashier') setView('pos');
+      else if (staff.role === 'Head Chef' || staff.role === 'Kitchen Staff') setView('kitchen');
+      else setView('pos');
+
+      setEmail('');
+      setPassword('');
+      setPin('');
+      setIsSubmitting(false);
+      return;
+    }
+
+    setLoginError('Invalid PIN code. Please verify your PIN or use Password Login.');
+    setIsSubmitting(false);
+  };
+
   const handleStaffLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loginMode === 'pin') {
+      return handlePinLogin(e);
+    }
+
     if (!email || !password) {
       setLoginError('Please enter both email and password.');
       return;
@@ -209,9 +278,6 @@ export default function AppRouter() {
     const cleanEmail = email.trim().toLowerCase();
     let foundStaff: StaffMember | undefined;
 
-    // Step 1: Authenticate via Supabase Auth (the single source of truth)
-    // OFFLINE MODE: during an internet blackout, verify against the cached
-    // credentials stored on this device from the last successful login.
     let authData: any = null;
     let authError: any = null;
     try {
@@ -226,11 +292,10 @@ export default function AppRouter() {
     }
 
     if (authError) {
-      // Network failure or invalid credentials — try the offline cache
       const offlineEntry = await verifyOfflineCredentials(cleanEmail, password);
       if (offlineEntry && offlineEntry.staff) {
         const s = offlineEntry.staff;
-        const staff: StaffMember = {
+        foundStaff = {
           id: s.id,
           name: s.name || cleanEmail.split('@')[0],
           email: s.email || cleanEmail,
@@ -240,14 +305,11 @@ export default function AppRouter() {
           status: s.status || 'active',
           avatar: s.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(s.name || 'Staff')}&background=f97316&color=fff&bold=true&size=200`,
         };
-        foundStaff = staff;
-        console.warn('[OFFLINE AUTH] Verified from local cache — operating without internet.');
       } else if (authError.message?.toLowerCase().includes('failed to fetch') ||
                  authError.message?.toLowerCase().includes('network') ||
                  isOffline()) {
-        setLoginError('OFFLINE MODE: No internet detected and no cached login for this account. Connect to the internet once to cache your credentials, or check the connection.');
+        setLoginError('OFFLINE MODE: No internet detected and no cached login for this account. Connect to the internet once to cache credentials.');
       } else {
-        // Supabase Auth rejected the credentials — surface the correct error
         if (authError.message.toLowerCase().includes('invalid login credentials') ||
             authError.message.toLowerCase().includes('invalid_credentials') ||
             authError.message.toLowerCase().includes('invalid email or password')) {
@@ -268,25 +330,12 @@ export default function AppRouter() {
       const authUid = authData.user.id;
       const authEmail = authData.user.email?.toLowerCase() || cleanEmail;
 
-      // Step 2: Fetch staff profile — first by UID (most reliable), then by email
       let dbStaff: any = null;
-
-      // Try by UID (staff.id = auth user UID)
-      const { data: byId } = await supabase
-        .from('staff')
-        .select('*')
-        .eq('id', authUid)
-        .maybeSingle();
-      
+      const { data: byId } = await supabase.from('staff').select('*').eq('id', authUid).maybeSingle();
       if (byId) {
         dbStaff = byId;
       } else {
-        // Fallback: query by email
-        const { data: byEmail } = await supabase
-          .from('staff')
-          .select('*')
-          .eq('email', authEmail)
-          .maybeSingle();
+        const { data: byEmail } = await supabase.from('staff').select('*').eq('email', authEmail).maybeSingle();
         dbStaff = byEmail;
       }
 
@@ -303,17 +352,9 @@ export default function AppRouter() {
             `https://ui-avatars.com/api/?name=${encodeURIComponent(dbStaff.name || 'Staff')}&background=f97316&color=fff&bold=true&size=200`,
         };
       } else {
-        // No staff record exists yet — auto-create a profile from the auth user's metadata
-        const displayName = authData.user.user_metadata?.name ||
-          authData.user.user_metadata?.full_name ||
-          authEmail.split('@')[0];
-
-        const assignedRole = authData.user.user_metadata?.role ||
-          (authEmail.includes('admin') ? 'Super Admin' : 'Senior Waiter');
-
-        const assignedBranch = authData.user.user_metadata?.branch ||
-          (assignedRole === 'Super Admin' ? 'Global HQ' : 'FAZE 3');
-
+        const displayName = authData.user.user_metadata?.name || authData.user.user_metadata?.full_name || authEmail.split('@')[0];
+        const assignedRole = authData.user.user_metadata?.role || (authEmail.includes('admin') ? 'Super Admin' : 'Senior Waiter');
+        const assignedBranch = authData.user.user_metadata?.branch || (assignedRole === 'Super Admin' ? 'Global HQ' : 'FAZE 3');
         const assignedBranchId = authData.user.user_metadata?.assignedBranchId || null;
 
         foundStaff = {
@@ -327,7 +368,6 @@ export default function AppRouter() {
           avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=f97316&color=fff&bold=true&size=200`,
         };
 
-        // Persist the auto-created profile to the staff table
         await supabase.from('staff').upsert({
           id: authUid,
           name: displayName,
@@ -342,7 +382,6 @@ export default function AppRouter() {
       }
     }
 
-    // Step 3: Validate found staff profile
     if (foundStaff) {
       if (foundStaff.status === 'banned') {
         setLoginError('Access Denied: This staff account is BANNED by Admin.');
@@ -369,24 +408,25 @@ export default function AppRouter() {
       }
       setActiveStaff(foundStaff);
 
-      // Cache credentials + profile for offline login during internet blackouts
       try {
         await storeOfflinePasswordHash(cleanEmail, password);
         await cacheOfflineAuth(foundStaff, { uid: foundStaff.id, displayName: foundStaff.name, email: foundStaff.email, photoURL: foundStaff.avatar });
       } catch { /* non-fatal */ }
 
-      // Auto-route to the correct dashboard by role
       if (foundStaff.role === 'Super Admin') setView('admin');
       else if (foundStaff.role === 'Branch Manager') setView('manager');
-      else if (foundStaff.role === 'Cashier') setView('pos'); // Cashiers go straight to Table Management (POS)
+      else if (foundStaff.role === 'Cashier') setView('pos');
       else if (foundStaff.role === 'Head Chef' || foundStaff.role === 'Kitchen Staff') setView('kitchen');
       else setView('pos');
 
+      setEmail('');
+      setPassword('');
+      setPin('');
       setIsSubmitting(false);
       return;
     }
 
-    setLoginError('Login failed. Your account may not have been set up in the system yet. Contact your admin.');
+    setLoginError('Login failed. Account not found.');
     setIsSubmitting(false);
   };
 
@@ -418,40 +458,88 @@ export default function AppRouter() {
             </p>
           </div>
 
-          <form onSubmit={handleStaffLogin} className="space-y-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-2">
-                Staff Email Address
-              </label>
-              <div className="relative">
-                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="admin@krown.ug"
-                  className="w-full bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/10 rounded-2xl py-3.5 pl-12 pr-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/50 transition-all text-sm font-medium"
-                />
-              </div>
-            </div>
+          {/* Mode Switcher Tabs */}
+          <div className="flex bg-slate-100 dark:bg-black/40 p-1 rounded-2xl mb-6 border border-black/5 dark:border-white/10">
+            <button
+              type="button"
+              onClick={() => { setLoginMode('password'); setLoginError(null); }}
+              className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition-all ${
+                loginMode === 'password'
+                  ? 'bg-white dark:bg-[#1A1A1E] text-slate-900 dark:text-white shadow-md'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              Password Login
+            </button>
+            <button
+              type="button"
+              onClick={() => { setLoginMode('pin'); setLoginError(null); }}
+              className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition-all ${
+                loginMode === 'pin'
+                  ? 'bg-white dark:bg-[#1A1A1E] text-slate-900 dark:text-white shadow-md'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              🔑 Staff PIN Code
+            </button>
+          </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-2">
-                Password
-              </label>
-              <div className="relative">
-                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/10 rounded-2xl py-3.5 pl-12 pr-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/50 transition-all text-sm font-medium"
-                />
+          <form onSubmit={handleStaffLogin} className="space-y-4">
+            {loginMode === 'password' ? (
+              <>
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-2">
+                    Staff Email Address
+                  </label>
+                  <div className="relative">
+                    <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                    <input
+                      type="email"
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="admin@krown.ug"
+                      className="w-full bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/10 rounded-2xl py-3.5 pl-12 pr-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/50 transition-all text-sm font-medium"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-2">
+                    Password
+                  </label>
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                    <input
+                      type="password"
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/10 rounded-2xl py-3.5 pl-12 pr-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/50 transition-all text-sm font-medium"
+                    />
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div>
+                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-2">
+                  Staff 4-Digit Security PIN
+                </label>
+                <div className="relative">
+                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                  <input
+                    type="password"
+                    maxLength={6}
+                    required
+                    value={pin}
+                    onChange={(e) => setPin(e.target.value)}
+                    placeholder="Enter 4-digit PIN..."
+                    className="w-full bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/10 rounded-2xl py-3.5 pl-12 pr-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/50 transition-all text-sm font-medium tracking-widest text-center text-lg"
+                  />
+                </div>
               </div>
-            </div>
+            )}
 
             {loginError && (
               <div className="p-3.5 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-center gap-2 text-red-500 text-xs font-semibold">
@@ -468,8 +556,29 @@ export default function AppRouter() {
               {isSubmitting ? (
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               ) : (
-                'Log In to Staff Dashboard'
+                loginMode === 'pin' ? 'Unlock POS with PIN' : 'Log In to Staff Dashboard'
               )}
+            </button>
+
+            {/* Google OAuth Login Button */}
+            <div className="relative my-4">
+              <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-black/5 dark:border-white/10" /></div>
+              <div className="relative flex justify-center text-xs font-semibold uppercase"><span className="bg-white dark:bg-[#121214] px-2 text-slate-400">Or Continue With</span></div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={isSubmitting}
+              className="w-full bg-slate-50 dark:bg-white/5 hover:bg-slate-100 dark:hover:bg-white/10 text-slate-900 dark:text-white py-3.5 rounded-2xl font-bold text-xs flex items-center justify-center gap-3 transition-all border border-black/5 dark:border-white/10"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path fill="#FBBC05" d="M5.84 14.1c-.22-.66-.35-1.36-.35-2.1s.13-1.44.35-2.1V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.62z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+              </svg>
+              <span>Sign in with Google Account</span>
             </button>
           </form>
 

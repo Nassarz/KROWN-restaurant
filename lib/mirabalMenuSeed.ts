@@ -467,5 +467,6 @@ export function ensureMirabalBranchAndMenu() {
     }
   }
 
+  dataStore.clearBranchSales(mirabal.id, mirabal.name);
   return mirabal;
 }
