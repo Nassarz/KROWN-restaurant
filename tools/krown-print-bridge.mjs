@@ -91,13 +91,46 @@ if (supabaseUrl && supabaseKey) {
     supabase = createClient(supabaseUrl, supabaseKey, {
       auth: { persistSession: false }
     });
-    console.log('[PRINT_AGENT] Supabase client initialized successfully.');
+    console.log('[PRINT_AGENT] Supabase Realtime WebSocket client initialized.');
   } catch (err) {
-    console.error('[PRINT_AGENT] Failed to load @supabase/supabase-js library:', err.message);
+    console.log('[PRINT_AGENT] Running in Zero-Dependency REST polling mode (Native Node Fetch).');
   }
 } else {
-  console.warn('[PRINT_AGENT] NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing. Supabase sync disabled.');
-  console.warn('[PRINT_AGENT] Tip: You can pass them as flags: node tools/krown-print-bridge.mjs --url <URL> --key <SERVICE_KEY>');
+  console.warn('[PRINT_AGENT] Supabase credentials missing. Running in local HTTP mode.');
+}
+
+// Zero-dependency REST API helpers using native Node fetch
+async function fetchQueuedJobsFromRest() {
+  if (!supabaseUrl || !supabaseKey) return [];
+  try {
+    const res = await fetch(`${supabaseUrl}/rest/v1/print_jobs?status=in.(QUEUED,pending)&order=created_at.asc`, {
+      headers: {
+        'apikey': supabaseKey,
+        'Authorization': `Bearer ${supabaseKey}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    if (!res.ok) return [];
+    return await res.json();
+  } catch (e) {
+    return [];
+  }
+}
+
+async function updateJobInRest(id, updates) {
+  if (!supabaseUrl || !supabaseKey) return;
+  try {
+    await fetch(`${supabaseUrl}/rest/v1/print_jobs?id=eq.${id}`, {
+      method: 'PATCH',
+      headers: {
+        'apikey': supabaseKey,
+        'Authorization': `Bearer ${supabaseKey}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify(updates)
+    });
+  } catch (e) { /* ignore */ }
 }
 
 // ── ADVANCED ESC/POS COMPILER ────────────────────────────────────────────────
@@ -387,17 +420,18 @@ function testConnection(ip, port) {
 
 // ── SUPABASE DATABASE QUEUE POLLER & LISTENER ─────────────────────────────────
 async function pollDatabaseQueue() {
-  if (!supabase) return;
+  if (!supabaseUrl || !supabaseKey) return;
   try {
-    const { data: queuedJobs, error } = await supabase
-      .from('print_jobs')
-      .select('*')
-      .in('status', ['QUEUED', 'pending'])
-      .order('created_at', { ascending: true });
-
-    if (error) {
-      console.error('[PRINT_AGENT] Supabase polling fetch error:', error.message);
-      return;
+    let queuedJobs = [];
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('print_jobs')
+        .select('*')
+        .in('status', ['QUEUED', 'pending'])
+        .order('created_at', { ascending: true });
+      if (!error && data) queuedJobs = data;
+    } else {
+      queuedJobs = await fetchQueuedJobsFromRest();
     }
 
     if (queuedJobs && queuedJobs.length > 0) {
@@ -412,7 +446,7 @@ async function pollDatabaseQueue() {
 }
 
 async function processDatabaseJob(job) {
-  // Deduplication: skip if already being processed by HTTP handler or another poll cycle
+  // Deduplication: skip if already being processed
   if (processingLock.has(job.id)) {
     console.log(`[PRINT_AGENT] Job ${job.id} already in progress, skipping duplicate.`);
     return;
@@ -421,14 +455,10 @@ async function processDatabaseJob(job) {
   const attempts = (job.attempts || 0) + 1;
   
   // Set printing state in Supabase to lock against other daemon instances
-  const { error: lockError } = await supabase
-    .from('print_jobs')
-    .update({ status: 'PRINTING', attempts })
-    .eq('id', job.id);
-
-  if (lockError) {
-    console.error(`[PRINT_AGENT] Could not lock job ${job.id}:`, lockError.message);
-    return;
+  if (supabase) {
+    await supabase.from('print_jobs').update({ status: 'PRINTING', attempts }).eq('id', job.id);
+  } else {
+    await updateJobInRest(job.id, { status: 'PRINTING', attempts });
   }
 
   console.log(`[PRINT_AGENT] Processing job ${job.id} from database. attempts: ${attempts}`);
@@ -438,7 +468,7 @@ async function processDatabaseJob(job) {
   let ip = KITCHEN_PRINTER_IP;
   let port = KITCHEN_PRINTER_PORT;
 
-  if (job.printer_id === 'receipt' || job.destination.toLowerCase().includes('receipt')) {
+  if (job.printer_id === 'receipt' || (job.destination && job.destination.toLowerCase().includes('receipt'))) {
     if (IS_RECEIPT_USB) {
       isUsb = true;
     } else {
@@ -452,50 +482,54 @@ async function processDatabaseJob(job) {
     await writeToPrinter(ip, port, escposBuffer, isUsb);
 
     // Success Status
-    await supabase
-      .from('print_jobs')
-      .update({
-        status: 'PRINTED', // maps to completed
-        printed_at: Date.now(),
-        last_error: null
-      })
-      .eq('id', job.id);
+    if (supabase) {
+      await supabase.from('print_jobs').update({ status: 'PRINTED', printed_at: Date.now(), last_error: null }).eq('id', job.id);
+    } else {
+      await updateJobInRest(job.id, { status: 'PRINTED', printed_at: Date.now(), last_error: null });
+    }
 
     console.log(`[PRINT_AGENT] ✓ Job ${job.id} printed and updated to printed.`);
   } catch (err) {
     console.error(`[PRINT_AGENT] ✗ Job ${job.id} failed:`, err.message);
     
-    await supabase
-      .from('print_jobs')
-      .update({ status: 'FAILED', last_error: err.message })
-      .eq('id', job.id);
+    if (supabase) {
+      await supabase.from('print_jobs').update({ status: 'FAILED', last_error: err.message }).eq('id', job.id);
+    } else {
+      await updateJobInRest(job.id, { status: 'FAILED', last_error: err.message });
+    }
   } finally {
     processingLock.delete(job.id);
   }
 }
 
 function startDatabaseQueueListener() {
-  if (!supabase) return;
+  if (!supabaseUrl || !supabaseKey) {
+    console.warn('[PRINT_AGENT] No Supabase credentials provided. Database queue listener skipped.');
+    return;
+  }
 
-  console.log('[PRINT_AGENT] Initializing queue polling (every 3 seconds)...');
-  setInterval(pollDatabaseQueue, 3000);
+  console.log('[PRINT_AGENT] Initializing database queue polling (every 2 seconds)...');
+  setInterval(pollDatabaseQueue, 2000);
+  pollDatabaseQueue(); // Initial check
 
-  console.log('[PRINT_AGENT] Subscribing to Supabase Realtime print_jobs...');
-  try {
-    supabase
-      .channel('print_jobs_sync')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'print_jobs' }, async (payload) => {
-        const job = payload.new;
-        if (job && (job.status === 'QUEUED' || job.status === 'pending')) {
-          console.log(`[PRINT_AGENT] Realtime insert captured for job ${job.id}`);
-          processDatabaseJob(job).catch(e => console.error('[PRINT_AGENT] Realtime handling error:', e.message));
-        }
-      })
-      .subscribe((status) => {
-        console.log(`[PRINT_AGENT] Supabase realtime connection status: ${status}`);
-      });
-  } catch (err) {
-    console.warn('[PRINT_AGENT] Realtime initialization exception:', err.message);
+  if (supabase) {
+    console.log('[PRINT_AGENT] Subscribing to Supabase Realtime print_jobs...');
+    try {
+      supabase
+        .channel('print_jobs_sync')
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'print_jobs' }, async (payload) => {
+          const job = payload.new;
+          if (job && (job.status === 'QUEUED' || job.status === 'pending')) {
+            console.log(`[PRINT_AGENT] Realtime insert captured for job ${job.id}`);
+            processDatabaseJob(job).catch(e => console.error('[PRINT_AGENT] Realtime handling error:', e.message));
+          }
+        })
+        .subscribe((status) => {
+          console.log(`[PRINT_AGENT] Supabase realtime connection status: ${status}`);
+        });
+    } catch (err) {
+      console.warn('[PRINT_AGENT] Realtime exception:', err.message);
+    }
   }
 }
 

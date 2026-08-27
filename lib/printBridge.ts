@@ -76,13 +76,8 @@ export async function sendToNetworkPrinter(
   orderId: string,
   type: 'KITCHEN_TICKET' | 'BILL' | 'CUSTOMER_RECEIPT'
 ): Promise<boolean> {
-  const cfg = getPrinterConfig();
-  if (!cfg.enabled) {
-    // When daemon bridge is disabled in POS settings, return false
-    // so POS falls back to direct browser printing (zero-daemon mode)
-    return false;
-  }
-  console.log(`[PrintBridge] Job ${jobId} (${type}) enqueued in Supabase. Daemon will print.`);
+  // Enqueue job in Supabase — daemon processes kitchen tickets via TCP and receipt tickets via USB/spooler
+  console.log(`[PrintBridge] Job ${jobId} (${type}) registered in database. Daemon will print.`);
   return true;
 }
 
