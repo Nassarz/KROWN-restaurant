@@ -180,6 +180,7 @@ export interface Order {
   prepStartedAt?: number;
   prepCompletedAt?: number;
   restaurantId: string;
+  branchId?: string;
   branchName: string;
   userId: string;
   createdAt: number;
@@ -357,4 +358,6 @@ export interface PrintJob {
   createdAt: number;
   lastError?: string | null;
   printedAt?: number | null;
+  branchId?: string;
+  branchName?: string;
 }

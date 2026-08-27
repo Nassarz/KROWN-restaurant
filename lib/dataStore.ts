@@ -1502,7 +1502,7 @@ class DataStoreEngine {
   public clearBranchSales(branchId: string, branchName?: string) {
     const bName = branchName?.toLowerCase() || 'mirabal';
     this.orders = this.orders.filter(o => o.branchId !== branchId && o.branchName?.toLowerCase() !== bName);
-    this.printJobs = this.printJobs.filter(pj => pj.branchId !== branchId && pj.branchName?.toLowerCase() !== bName);
+    this.printJobs = this.printJobs.filter(pj => pj.branchName?.toLowerCase() !== bName);
 
     this.branches = this.branches.map(b => {
       if (b.id === branchId || b.name.toLowerCase() === bName) {
