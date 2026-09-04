@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
     }
 
     const { searchParams } = new URL(request.url);
-    const branchId = searchParams.get('branchId') || undefined;
+    const branchId = searchParams.get('branchId') || ctx.branchId || undefined;
 
     const staff = await listStaff(ctx, branchId);
     return NextResponse.json({ data: staff });

@@ -46,7 +46,7 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
   const [idType, setIdType] = useState<'National ID' | 'Passport' | 'Student ID'>('National ID');
   const [idNumber, setIdNumber] = useState('');
   const [role, setRole] = useState<StaffMember['role']>('Senior Waiter');
-  const [selectedBranch, setSelectedBranch] = useState(currentBranchId || '');
+  const [selectedBranch, setSelectedBranch] = useState(currentBranchId && currentBranchId !== 'all' ? currentBranchId : '');
   const [avatarUrl, setAvatarUrl] = useState('');
   const [previewUrl, setPreviewUrl] = useState('');
   const [isUploading, setIsUploading] = useState(false);

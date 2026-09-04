@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const branchId = request.nextUrl.searchParams.get('branchId') || undefined;
+    const branchId = request.nextUrl.searchParams.get('branchId') || ctx.branchId || undefined;
     const companies = await companyService.listCompanies(ctx, branchId);
     return NextResponse.json({ data: companies });
   } catch (error: any) {

@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const branchId = request.nextUrl.searchParams.get('branchId') || undefined;
+    const branchId = request.nextUrl.searchParams.get('branchId') || ctx.branchId || undefined;
     const startDate = request.nextUrl.searchParams.get('startDate') || undefined;
     const endDate = request.nextUrl.searchParams.get('endDate') || undefined;
 

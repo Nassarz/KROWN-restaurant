@@ -18,11 +18,24 @@ export async function POST(req: NextRequest) {
     const sql = getSql();
     await setTenantContext(sql, ctx.organizationId);
 
-    // Return only staff from this organization
-    const allStaff = await sql(
-      'SELECT id, name, email, role, branch, assigned_branch_id, status, avatar, phone, id_type, id_number FROM staff WHERE organization_id = $1 ORDER BY created_at DESC',
-      [ctx.organizationId]
-    );
+    // Return staff from this organization, scoped to branch for non-super-admins
+    let allStaff;
+    if (ctx.role === 'super_admin' || ctx.role === 'restaurant_admin') {
+      allStaff = await sql(
+        'SELECT id, name, email, role, branch, assigned_branch_id, status, avatar, phone, id_type, id_number FROM staff WHERE organization_id = $1 ORDER BY created_at DESC',
+        [ctx.organizationId]
+      );
+    } else if (ctx.branchId) {
+      allStaff = await sql(
+        'SELECT id, name, email, role, branch, assigned_branch_id, status, avatar, phone, id_type, id_number FROM staff WHERE organization_id = $1 AND assigned_branch_id = $2 ORDER BY created_at DESC',
+        [ctx.organizationId, ctx.branchId]
+      );
+    } else {
+      allStaff = await sql(
+        'SELECT id, name, email, role, branch, assigned_branch_id, status, avatar, phone, id_type, id_number FROM staff WHERE organization_id = $1 ORDER BY created_at DESC',
+        [ctx.organizationId]
+      );
+    }
 
     return NextResponse.json({
       success: true,
