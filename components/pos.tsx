@@ -44,7 +44,7 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
   });
   const [viewState, setViewState] = useState<'tables' | 'menu' | 'payment'>('tables');
   const [zones, setZones] = useState<any[]>([]);
-  const [activeZoneId, setActiveZoneId] = useState<string>('zone-1');
+  const [activeZoneId, setActiveZoneId] = useState<string>('');
   const [activeTable, setActiveTable] = useState<string | null>(null);
   const [activeSeat, setActiveSeat] = useState<string>('Whole Table');
   const [showSeatModal, setShowSeatModal] = useState<boolean>(false);

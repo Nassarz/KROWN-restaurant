@@ -41,6 +41,7 @@ export default function ManagerPage({ user, setView }: { user: any, setView: (v:
 
   // Data state
   const [orders, setOrders] = useState<any[]>([]);
+  const [allOrders, setAllOrders] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [ingredients, setIngredients] = useState<any[]>([]);
   const [expenses, setExpenses] = useState<any[]>([]);
@@ -77,6 +78,7 @@ export default function ManagerPage({ user, setView }: { user: any, setView: (v:
       }
 
       setOrders(dataStore.getOrders(managerBranchId, start, end));
+      setAllOrders(dataStore.getOrders(managerBranchId));
       setProducts(dataStore.getProducts(managerBranchId));
       setIngredients(dataStore.getIngredients(managerBranchId));
       setExpenses(dataStore.getExpenses(managerBranchId, start, end));
@@ -326,7 +328,7 @@ export default function ManagerPage({ user, setView }: { user: any, setView: (v:
         <AnimatePresence mode="wait">
           {activeTab === 'orders' && (
             <motion.div key="orders" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="h-full overflow-y-auto">
-              <ManagerOrders orders={orders} />
+              <ManagerOrders orders={orders} allOrders={allOrders} />
             </motion.div>
           )}
 

@@ -206,11 +206,12 @@ export async function payOrder(
   if (order.status === 'cancelled') throw new Error('Cannot pay a cancelled order');
 
   const paymentStatus = payment.amount >= order.total ? 'paid' : 'partial';
+  const orderStatus = paymentStatus === 'paid' ? 'completed' : order.status;
 
   await sql`BEGIN`;
   try {
     await sql`
-      UPDATE orders SET payment_method = ${payment.method}, payment_status = ${paymentStatus}, updated_at = NOW()
+      UPDATE orders SET payment_method = ${payment.method}, payment_status = ${paymentStatus}, status = ${orderStatus}, updated_at = NOW()
       WHERE id = ${orderId} AND organization_id = ${ctx.organizationId}
     `;
 

@@ -1256,10 +1256,10 @@ function TablesView({ selectedBranchId }: { selectedBranchId: string }) {
     return () => unsub();
   }, [selectedBranchId]);
 
-  const getTableStatus = (zoneId: string, tableNumber: string): 'available' | 'occupied' => {
+  const getTableStatus = (zoneId: string, zoneName: string, tableNumber: string): 'available' | 'occupied' => {
     const hasActiveOrder = orders.some(o =>
       o.table === tableNumber &&
-      o.place === zoneId &&
+      (o.place === zoneId || o.place === zoneName) &&
       o.status !== 'completed' && o.status !== 'cancelled'
     );
     return hasActiveOrder ? 'occupied' : 'available';
@@ -1298,7 +1298,7 @@ function TablesView({ selectedBranchId }: { selectedBranchId: string }) {
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
             {(zone.tables || []).map((t: any) => {
-              const status = getTableStatus(zone.id, t.tableNumber);
+              const status = getTableStatus(zone.id, zone.name, t.tableNumber);
               return (
                 <div
                   key={t.tableNumber}
@@ -1310,7 +1310,7 @@ function TablesView({ selectedBranchId }: { selectedBranchId: string }) {
                 >
                   <span className="font-black text-xl text-slate-900 dark:text-white">{t.tableNumber}</span>
                   <div className="flex gap-0.5 mt-2">
-                    {Array.from({ length: t.seats || 4 }, (_, i) => (
+                    {Array.from({ length: t.seatsCount || t.seats || 4 }, (_, i) => (
                       <div key={i} className={`w-2 h-2 rounded-full ${status === 'occupied' ? 'bg-red-500' : 'bg-green-500'}`} />
                     ))}
                   </div>

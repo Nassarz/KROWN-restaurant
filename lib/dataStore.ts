@@ -946,7 +946,7 @@ class DataStoreEngine {
           change: paymentData.change ?? o.change,
           paymentStatus: 'paid',
           paidAmount: o.total,
-          status: o.status === 'pending' ? 'preparing' : o.status,
+          status: 'completed',
         };
         targetOrder = updated;
 
