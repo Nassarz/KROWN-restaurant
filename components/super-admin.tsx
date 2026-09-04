@@ -465,7 +465,6 @@ export default function SuperAdminPage({ user, setView, activeStaff, initialTab 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const fetchAuditLogs = useCallback(async () => {
     setLoadingAudit(true);
     try {
@@ -477,9 +476,9 @@ export default function SuperAdminPage({ user, setView, activeStaff, initialTab 
     } catch { /* silent */ } finally {
       setLoadingAudit(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const fetchNotifications = useCallback(async () => {
     setLoadingNotifications(true);
     try {
@@ -491,9 +490,9 @@ export default function SuperAdminPage({ user, setView, activeStaff, initialTab 
     } catch { /* silent */ } finally {
       setLoadingNotifications(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const fetchConversations = useCallback(async () => {
     setLoadingConversations(true);
     try {
@@ -505,6 +504,7 @@ export default function SuperAdminPage({ user, setView, activeStaff, initialTab 
     } catch { /* silent */ } finally {
       setLoadingConversations(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

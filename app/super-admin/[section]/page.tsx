@@ -1,23 +1,22 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import SuperAdminPage from '@/components/super-admin';
 import { useRouter, useParams } from 'next/navigation';
+
+function readCachedUser(): any {
+  try {
+    const raw = localStorage.getItem('krown_staff_profile');
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return null;
+}
 
 export default function SuperAdminSectionPage() {
   const router = useRouter();
   const params = useParams();
   const rawSection = params?.section as string;
-  const [user, setUser] = useState<any>(null);
-
-  useEffect(() => {
-    const rawUser = localStorage.getItem('krown_staff_profile');
-    if (rawUser) {
-      try {
-        setUser(JSON.parse(rawUser));
-      } catch {}
-    }
-  }, []);
+  const [user] = useState<any>(() => readCachedUser());
 
   const tabMapping: Record<string, any> = {
     analytics: 'analytics',

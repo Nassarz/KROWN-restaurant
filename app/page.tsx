@@ -43,11 +43,33 @@ function normalizeRole(role: string | null | undefined): StaffMember['role'] {
   return map[role.toLowerCase()] || 'Cashier';
 }
 
+function readCachedStaff(): { user: any; staff: StaffMember; view: 'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | 'super_admin' } | null {
+  try {
+    const cached = localStorage.getItem('krown_staff_profile');
+    if (cached) {
+      const staff = JSON.parse(cached) as StaffMember;
+      if (staff?.id && staff?.email) {
+        const u = { uid: staff.id, displayName: staff.name, email: staff.email, photoURL: staff.avatar };
+        let v: 'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | 'super_admin' = 'pos';
+        if (staff.role === 'Super Admin') v = 'super_admin';
+        else if (staff.role === 'Restaurant Admin') v = 'admin';
+        else if (staff.role === 'Branch Manager') v = 'manager';
+        else if (staff.role === 'Cashier') v = 'cashier';
+        else if (staff.role === 'Head Chef' || staff.role === 'Kitchen Staff') v = 'kitchen';
+        return { user: u, staff, view: v };
+      }
+    }
+  } catch { /* corrupted cache */ }
+  return null;
+}
+
 export default function AppRouter() {
-  const [user, setUser] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | 'super_admin'>('pos');
-  const [activeStaff, setActiveStaff] = useState<StaffMember | null>(null);
+  const _cached = readCachedStaff();
+  const _hasToken = typeof window !== 'undefined' && !!localStorage.getItem('krown_session_token');
+  const [user, setUser] = useState<any>(_cached?.user ?? null);
+  const [loading, setLoading] = useState(_cached ? false : _hasToken);
+  const [view, setView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | 'super_admin'>(_cached?.view ?? 'pos');
+  const [activeStaff, setActiveStaff] = useState<StaffMember | null>(_cached?.staff ?? null);
   const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
   const [pendingView, setPendingView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | null>(null);
 
@@ -75,32 +97,15 @@ export default function AppRouter() {
   }, [activeStaff]);
 
   useEffect(() => {
-    // Fast path: use cached staff profile (instant, no network)
-    try {
-      const cached = localStorage.getItem('krown_staff_profile');
-      if (cached) {
-        const staff = JSON.parse(cached) as StaffMember;
-        if (staff?.id && staff?.email) {
-          setUser({ uid: staff.id, displayName: staff.name, email: staff.email, photoURL: staff.avatar });
-          setActiveStaff(staff);
-          if (staff.role === 'Super Admin') setView('super_admin');
-          else if (staff.role === 'Restaurant Admin') setView('admin');
-          else if (staff.role === 'Branch Manager') setView('manager');
-          else if (staff.role === 'Cashier') setView('cashier');
-          else if (staff.role === 'Head Chef' || staff.role === 'Kitchen Staff') setView('kitchen');
-          else setView('pos');
-          setLoading(false);
-          return;
-        }
-      }
-    } catch { /* corrupted cache, fall through */ }
+    // If cached staff was loaded during render, skip API check
+    if (activeStaff) {
+      dataStore.refresh().catch(() => {});
+      return;
+    }
 
     // Slow path: validate token with API
     const token = localStorage.getItem('krown_session_token') || '';
-    if (!token) {
-      setLoading(false);
-      return;
-    }
+    if (!token) return;
 
     const controller = new AbortController();
     const apiTimeout = setTimeout(() => controller.abort(), 5000);
