@@ -473,6 +473,16 @@ class DataStoreEngine {
       if (sCats) this.customCategories = JSON.parse(sCats);
       const sJobs = localStorage.getItem('krown_print_jobs');
       if (sJobs) this.printJobs = JSON.parse(sJobs);
+      const sZones = localStorage.getItem('krown_zones');
+      if (sZones) this.zones = JSON.parse(sZones);
+      const sBranches = localStorage.getItem('krown_branches');
+      if (sBranches) this.branches = JSON.parse(sBranches);
+      const sCompanies = localStorage.getItem('krown_companies');
+      if (sCompanies) this.companies = JSON.parse(sCompanies);
+      const sExpenses = localStorage.getItem('krown_expenses');
+      if (sExpenses) this.expenses = JSON.parse(sExpenses);
+      const sAudit = localStorage.getItem('krown_audit');
+      if (sAudit) this.auditLogs = JSON.parse(sAudit);
     } catch (e) {
       console.warn('[DataStore] loadLocal parse warning:', e);
     }
@@ -509,55 +519,60 @@ class DataStoreEngine {
 
   private async fetchAll() {
     try {
-      const [productsRes, ingredientsRes, ordersRes, branchesRes, staffRes, companiesRes, zonesRes, auditRes, expensesRes, movementsRes, printJobsRes] = await Promise.all([
-        api.products.list().catch(() => ({ data: [] })),
-        api.ingredients.list().catch(() => ({ data: [] })),
-        api.orders.list().catch(() => ({ data: [] })),
-        api.branches.list().catch(() => ({ data: [] })),
-        api.staff.list().catch(() => ({ data: [] })),
-        api.companies.list().catch(() => ({ data: [] })),
-        api.zones.list().catch(() => ({ data: [] })),
-        api.audit.list().catch(() => ({ data: [] })),
-        api.expenses.list().catch(() => ({ data: [] })),
-        api.inventory.movements().catch(() => ({ data: [] })),
-        api.printJobs.list().catch(() => ({ data: [] })),
+      // Each call returns { data, ok } — ok=true means the API actually succeeded.
+      // On failure (401, network, etc.) ok=false, so we keep cached in-memory data
+      // instead of overwriting it with an empty array.
+      const safe = async (p: Promise<any>): Promise<{ data: any; ok: boolean }> => {
+        try {
+          const res = await p;
+          return { data: res?.data ?? res ?? [], ok: true };
+        } catch {
+          return { data: [], ok: false };
+        }
+      };
+
+      const [
+        productsRes, ingredientsRes, ordersRes, branchesRes, staffRes,
+        companiesRes, zonesRes, auditRes, expensesRes, movementsRes, printJobsRes,
+      ] = await Promise.all([
+        safe(api.products.list()),
+        safe(api.ingredients.list()),
+        safe(api.orders.list()),
+        safe(api.branches.list()),
+        safe(api.staff.list()),
+        safe(api.companies.list()),
+        safe(api.zones.list()),
+        safe(api.audit.list()),
+        safe(api.expenses.list()),
+        safe(api.inventory.movements()),
+        safe(api.printJobs.list()),
       ]);
 
-      const products = productsRes.data ?? productsRes ?? [];
-      const ingredients = ingredientsRes.data ?? ingredientsRes ?? [];
-      const orders = ordersRes.data ?? ordersRes ?? [];
-      const branches = branchesRes.data ?? branchesRes ?? [];
-      const staff = staffRes.data ?? staffRes ?? [];
-      const companies = companiesRes.data ?? companiesRes ?? [];
-      const zones = zonesRes.data ?? zonesRes ?? [];
-      const auditLogs = auditRes.data ?? auditRes ?? [];
-      const expenses = expensesRes.data ?? expensesRes ?? [];
-      const movements = movementsRes.data ?? movementsRes ?? [];
-      const printJobs = printJobsRes.data ?? printJobsRes ?? [];
-
-      if (Array.isArray(products)) this.products = products.map(fromDbProduct);
-      if (Array.isArray(ingredients)) this.ingredients = ingredients.map(fromDbIngredient);
-      if (Array.isArray(movements)) this.inventoryMovements = movements.map(fromDbMovement);
-      if (Array.isArray(orders)) this.orders = orders.map(fromDbOrder);
-      if (Array.isArray(branches)) this.branches = branches.map(fromDbBranch);
-      if (Array.isArray(staff) && staff.length > 0) {
-        const dbStaffList = staff.map(fromDbStaff);
+      // Only overwrite in-memory data when the API actually succeeded with non-empty data.
+      // This prevents failed API calls (401, network errors) from wiping out cached data.
+      if (productsRes.ok && Array.isArray(productsRes.data)) this.products = productsRes.data.map(fromDbProduct);
+      if (ingredientsRes.ok && Array.isArray(ingredientsRes.data)) this.ingredients = ingredientsRes.data.map(fromDbIngredient);
+      if (movementsRes.ok && Array.isArray(movementsRes.data)) this.inventoryMovements = movementsRes.data.map(fromDbMovement);
+      if (ordersRes.ok && Array.isArray(ordersRes.data)) this.orders = ordersRes.data.map(fromDbOrder);
+      if (branchesRes.ok && Array.isArray(branchesRes.data)) this.branches = branchesRes.data.map(fromDbBranch);
+      if (staffRes.ok && Array.isArray(staffRes.data) && staffRes.data.length > 0) {
+        const dbStaffList = staffRes.data.map(fromDbStaff);
         const map = new Map<string, StaffMember>();
         this.staff.forEach(s => map.set(s.id, s));
         dbStaffList.forEach(s => map.set(s.id, s));
         this.staff = Array.from(map.values());
       }
-      if (Array.isArray(companies)) this.companies = companies.map(fromDbCompany);
+      if (companiesRes.ok && Array.isArray(companiesRes.data)) this.companies = companiesRes.data.map(fromDbCompany);
 
       // Load company staff for each company (nested resource)
-      if (Array.isArray(companies) && companies.length > 0) {
+      if (companiesRes.ok && Array.isArray(companiesRes.data) && companiesRes.data.length > 0) {
         const staffResults = await Promise.all(
-          companies.map((c: any) =>
-            api.companies.listStaff(c.id).catch(() => ({ data: [] }))
+          companiesRes.data.map((c: any) =>
+            safe(api.companies.listStaff(c.id))
           )
         );
-        const allCompanyStaff = staffResults.flatMap((r: any) => r.data ?? r ?? []);
-        if (Array.isArray(allCompanyStaff)) {
+        const allCompanyStaff = staffResults.filter(r => r.ok).flatMap((r: any) => r.data ?? []);
+        if (Array.isArray(allCompanyStaff) && allCompanyStaff.length > 0) {
           this.companyStaff = allCompanyStaff.map(fromDbCompanyStaff);
         }
       }
@@ -568,20 +583,23 @@ class DataStoreEngine {
           headers: {
             'Authorization': `Bearer ${typeof window !== 'undefined' ? localStorage.getItem('krown_session_token') || '' : ''}`,
           },
-        }).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }));
-        const prodIngs = piRes.data ?? [];
-        if (Array.isArray(prodIngs) && prodIngs.length > 0) {
-          this.productIngredients = prodIngs.map((r: any) => ({
-            id: r.id, productId: r.product_id, ingredientId: r.ingredient_id,
-            quantityPerUnit: Number(r.quantity_per_unit) || 1,
-            branchId: r.branch_id, createdAt: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
-          }));
+        });
+        if (piRes.ok) {
+          const piData = await piRes.json();
+          const prodIngs = piData?.data ?? [];
+          if (Array.isArray(prodIngs) && prodIngs.length > 0) {
+            this.productIngredients = prodIngs.map((r: any) => ({
+              id: r.id, productId: r.product_id, ingredientId: r.ingredient_id,
+              quantityPerUnit: Number(r.quantity_per_unit) || 1,
+              branchId: r.branch_id, createdAt: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
+            }));
+          }
         }
       } catch { /* product ingredients are non-critical */ }
-      if (Array.isArray(zones)) this.zones = zones.map(fromDbZone);
-      if (Array.isArray(auditLogs)) this.auditLogs = auditLogs.map(fromDbAuditLog);
-      if (Array.isArray(expenses)) this.expenses = expenses.map(fromDbExpense);
-      if (Array.isArray(printJobs)) this.printJobs = printJobs.map(fromDbPrintJob);
+      if (zonesRes.ok && Array.isArray(zonesRes.data)) this.zones = zonesRes.data.map(fromDbZone);
+      if (auditRes.ok && Array.isArray(auditRes.data)) this.auditLogs = auditRes.data.map(fromDbAuditLog);
+      if (expensesRes.ok && Array.isArray(expensesRes.data)) this.expenses = expensesRes.data.map(fromDbExpense);
+      if (printJobsRes.ok && Array.isArray(printJobsRes.data)) this.printJobs = printJobsRes.data.map(fromDbPrintJob);
 
       this.persistLocal();
     } catch (e) {
