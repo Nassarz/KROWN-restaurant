@@ -38,6 +38,9 @@ export async function POST(req: NextRequest) {
     if (!email?.trim()) {
       return NextResponse.json({ error: 'Staff email is required' }, { status: 400 });
     }
+    if (!assignedBranchId || assignedBranchId === 'all') {
+      return NextResponse.json({ error: 'Please select a branch to assign this staff member' }, { status: 400 });
+    }
 
     const sql = getSql();
     await setTenantContext(sql, ctx.organizationId);

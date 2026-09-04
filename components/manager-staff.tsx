@@ -564,12 +564,13 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">Assigned Branch *</label>
-                    <select value={selectedBranch} onChange={e => setSelectedBranch(e.target.value)}
+                    <select required value={selectedBranch} onChange={e => setSelectedBranch(e.target.value)}
                       className="w-full bg-slate-50 dark:bg-black/30 border border-black/10 dark:border-white/10 rounded-xl p-3 text-sm text-slate-900 dark:text-white">
+                      <option value="">Select a branch...</option>
                       {branches.map(b => (
                         <option key={b.id} value={b.id}>{b.name}</option>
                       ))}
-                      {branches.length === 0 && <option value="">No branches yet</option>}
+                      {branches.length === 0 && <option value="" disabled>No branches available</option>}
                     </select>
                   </div>
                 </div>
