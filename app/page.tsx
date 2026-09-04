@@ -51,19 +51,61 @@ function normalizeRole(role: string | null | undefined): StaffMember['role'] {
 }
 
 export default function AppRouter() {
-  // Clear session on first page load only — requires fresh auth
-  const [_cached] = useState<null>(() => {
+  // Restore session from localStorage on page load (survives browser close)
+  const [activeStaff, setActiveStaff] = useState<StaffMember | null>(() => {
     if (typeof window !== 'undefined') {
-      localStorage.removeItem('krown_session_token');
-      localStorage.removeItem('krown_staff_profile');
-      sessionStorage.removeItem('krown_active_session');
+      try {
+        const cached = localStorage.getItem('krown_staff_profile');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed?.id && parsed?.email && parsed?.role) {
+            sessionStorage.setItem('krown_active_session', 'true');
+            return parsed;
+          }
+        }
+      } catch { /* ignore corrupted cache */ }
     }
     return null;
   });
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<any>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('krown_staff_profile');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed?.id && parsed?.email) {
+            return {
+              uid: parsed.id,
+              displayName: parsed.name,
+              email: parsed.email,
+              photoURL: parsed.avatar,
+              assignedBranchId: parsed.assignedBranchId || null,
+            };
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    return null;
+  });
   const [loading, setLoading] = useState(false);
-  const [view, setView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | 'super_admin'>('pos');
-  const [activeStaff, setActiveStaff] = useState<StaffMember | null>(null);
+  const [view, setView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | 'super_admin'>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('krown_staff_profile');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed?.role) {
+            if (parsed.role === 'Super Admin') return 'super_admin';
+            if (parsed.role === 'Restaurant Admin') return 'admin';
+            if (parsed.role === 'Branch Manager') return 'manager';
+            if (parsed.role === 'Cashier') return 'cashier';
+            if (parsed.role === 'Head Chef' || parsed.role === 'Kitchen Staff') return 'kitchen';
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    return 'pos';
+  });
   const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
   const [pendingView, setPendingView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | null>(null);
 
@@ -128,7 +170,13 @@ export default function AppRouter() {
           avatar: authUser.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(authUser.name || 'Staff')}&background=f97316&color=fff&bold=true&size=200`,
         };
         localStorage.setItem('krown_staff_profile', JSON.stringify(staff));
-        setUser({ uid: staff.id, displayName: staff.name, email: staff.email, photoURL: staff.avatar });
+        setUser({
+          uid: staff.id,
+          displayName: staff.name,
+          email: staff.email,
+          photoURL: staff.avatar,
+          assignedBranchId: staff.assignedBranchId,
+        });
         setActiveStaff(staff);
         if (staff.role === 'Super Admin') setView('super_admin');
         else if (staff.role === 'Restaurant Admin') setView('admin');
@@ -298,7 +346,13 @@ export default function AppRouter() {
         setIsSubmitting(false);
         return;
       }
-      setUser({ uid: foundStaff.id, displayName: foundStaff.name, email: foundStaff.email, photoURL: foundStaff.avatar });
+      setUser({
+        uid: foundStaff.id,
+        displayName: foundStaff.name,
+        email: foundStaff.email,
+        photoURL: foundStaff.avatar,
+        assignedBranchId: foundStaff.assignedBranchId,
+      });
       setActiveStaff(foundStaff);
       localStorage.setItem('krown_staff_profile', JSON.stringify(foundStaff));
       if (typeof window !== 'undefined') sessionStorage.setItem('krown_active_session', 'true');
@@ -465,6 +519,7 @@ export default function AppRouter() {
         displayName: foundStaff.name,
         email: foundStaff.email,
         photoURL: foundStaff.avatar,
+        assignedBranchId: foundStaff.assignedBranchId,
       });
       if (typeof window !== 'undefined') {
         sessionStorage.setItem('krown_active_session', 'true');

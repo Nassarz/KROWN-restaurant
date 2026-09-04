@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 
-import { ChefHat, CheckCircle, Clock, ChevronLeft, Printer } from 'lucide-react';
+import { ChefHat, CheckCircle, Clock, ChevronLeft, Printer, LogOut } from 'lucide-react';
 import { vibrate } from '@/lib/utils';
 import { useNotification } from '@/hooks/use-notification';
 import { printTicket } from '@/lib/printer';
@@ -67,6 +67,13 @@ export default function KitchenPage({ setView, activeStaff }: { setView: (v: 'po
             <p className="text-slate-500 font-medium">Live Order Monitoring • {activeStaff?.name || 'Head Chef'}</p>
           </div>
         </div>
+        <button
+          onClick={() => { localStorage.removeItem('krown_session_token'); localStorage.removeItem('krown_staff_profile'); sessionStorage.removeItem('krown_active_session'); fetch('/api/auth/logout', { method: 'POST' }).catch(() => {}); window.location.href = '/'; }}
+          className="p-3 rounded-2xl bg-white/80 dark:bg-white/5 shadow-sm border border-black/5 dark:border-white/10 hover:bg-red-50 dark:hover:bg-red-500/10 text-slate-400 hover:text-red-500 transition-colors backdrop-blur-xl"
+          title="Sign Out"
+        >
+          <LogOut className="w-5 h-5" />
+        </button>
       </header>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 items-start">

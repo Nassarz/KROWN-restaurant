@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Search, Clock, ChevronRight, Printer, Download, Eye, Receipt, Building2,
   MapPin, X, CheckCircle2, DollarSign, Split, CreditCard, Banknote, Smartphone,
-  Store, Shield, Filter, RefreshCw, ChevronLeft, ArrowRight, UserCheck, AlertCircle, Plus
+  Store, Shield, Filter, RefreshCw, ChevronLeft, ArrowRight, UserCheck, AlertCircle, Plus, LogOut
 } from 'lucide-react';
 import { formatUGX } from '@/lib/mockData';
 import { printTicket, downloadReceiptFile, generateFormattedThermalReceipt } from '@/lib/printer';
@@ -15,6 +15,7 @@ import { useNotification } from '@/hooks/use-notification';
 import { getPrinterConfig, setPrinterConfig, testNetworkPrinter, retryNetworkPrintJob } from '@/lib/printBridge';
 
 export default function CashierDashboard({ setView, activeStaff }: { setView: (v: 'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier') => void; activeStaff?: any }) {
+  const [viewTab, setViewTab] = useState<'orders' | 'tables'>('orders');
   const [orders, setOrders] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState<string>(() => activeStaff?.assignedBranchId || '');
@@ -379,6 +380,13 @@ export default function CashierDashboard({ setView, activeStaff }: { setView: (v
           <ChevronLeft className="w-4 h-4" />
           <span>Exit POS</span>
         </button>
+        <button
+          onClick={() => { localStorage.removeItem('krown_session_token'); localStorage.removeItem('krown_staff_profile'); sessionStorage.removeItem('krown_active_session'); fetch('/api/auth/logout', { method: 'POST' }).catch(() => {}); window.location.href = '/'; }}
+          className="p-2 bg-red-500/10 rounded-xl text-red-400 hover:text-red-600 transition-colors"
+          title="Sign Out"
+        >
+          <LogOut className="w-4 h-4" />
+        </button>
       </div>
 
       {/* Desktop Sidebar Navigation */}
@@ -397,10 +405,27 @@ export default function CashierDashboard({ setView, activeStaff }: { setView: (v
           </button>
 
           <button
-            className="flex flex-col items-center justify-center gap-1.5 w-full py-3 rounded-2xl transition-all duration-300 text-orange-500 bg-orange-500/10"
+            onClick={() => { vibrate(20); setViewTab('orders'); }}
+            className={`flex flex-col items-center justify-center gap-1.5 w-full py-3 rounded-2xl transition-all duration-300 ${
+              viewTab === 'orders'
+                ? 'text-orange-500 bg-orange-500/10'
+                : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/5'
+            }`}
           >
             <DollarSign className="w-5 h-5 stroke-[2]" />
             <span className="text-[10px] font-bold tracking-wide">Cashier</span>
+          </button>
+
+          <button
+            onClick={() => { vibrate(20); setViewTab('tables'); }}
+            className={`flex flex-col items-center justify-center gap-1.5 w-full py-3 rounded-2xl transition-all duration-300 ${
+              viewTab === 'tables'
+                ? 'text-orange-500 bg-orange-500/10'
+                : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/5'
+            }`}
+          >
+            <MapPin className="w-5 h-5 stroke-[2]" />
+            <span className="text-[10px] font-medium tracking-wide">Tables</span>
           </button>
 
           {isKitchen && (
@@ -422,11 +447,23 @@ export default function CashierDashboard({ setView, activeStaff }: { setView: (v
               <span className="text-[10px] font-medium tracking-wide">Manager</span>
             </button>
           )}
+
+          <button
+            onClick={() => { localStorage.removeItem('krown_session_token'); localStorage.removeItem('krown_staff_profile'); sessionStorage.removeItem('krown_active_session'); fetch('/api/auth/logout', { method: 'POST' }).catch(() => {}); window.location.href = '/'; }}
+            className="flex flex-col items-center justify-center gap-1.5 w-full py-3 rounded-2xl transition-all duration-300 text-red-400 hover:text-red-600 hover:bg-red-500/5 dark:hover:text-red-400 dark:hover:bg-red-500/5"
+          >
+            <LogOut className="w-5 h-5 stroke-[2]" />
+            <span className="text-[10px] font-medium tracking-wide">Sign Out</span>
+          </button>
         </div>
       </nav>
 
       {/* Main Cashier Workspace */}
       <main className="flex-1 flex flex-col h-full min-w-0 p-6 lg:p-8 overflow-y-auto custom-scrollbar">
+        {viewTab === 'tables' ? (
+          <TablesView selectedBranchId={selectedBranchId} />
+        ) : (
+          <>
         {/* Top Header & Metrics Bar */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
           <div>
@@ -609,6 +646,8 @@ export default function CashierDashboard({ setView, activeStaff }: { setView: (v
             </div>
           )}
         </div>
+          </>
+        )}
       </main>
 
       {/* Order Payment & Detail Drawer Modal */}
@@ -1196,6 +1235,94 @@ export default function CashierDashboard({ setView, activeStaff }: { setView: (v
           </div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+// ── Tables View (shows zones & tables with occupancy) ─────────────────────────
+function TablesView({ selectedBranchId }: { selectedBranchId: string }) {
+  const [zones, setZones] = useState<any[]>([]);
+  const [orders, setOrders] = useState<any[]>([]);
+
+  useEffect(() => {
+    const syncData = () => {
+      setZones(dataStore.getZones(selectedBranchId));
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      setOrders(dataStore.getOrders(selectedBranchId, today.getTime()));
+    };
+    syncData();
+    const unsub = dataStore.subscribe(syncData);
+    return () => unsub();
+  }, [selectedBranchId]);
+
+  const getTableStatus = (zoneId: string, tableNumber: string): 'available' | 'occupied' => {
+    const hasActiveOrder = orders.some(o =>
+      o.table === tableNumber &&
+      o.place === zoneId &&
+      o.status !== 'completed' && o.status !== 'cancelled'
+    );
+    return hasActiveOrder ? 'occupied' : 'available';
+  };
+
+  if (zones.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
+        <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-white/5 flex items-center justify-center">
+          <MapPin className="w-8 h-8 text-slate-400" />
+        </div>
+        <div>
+          <p className="font-bold text-slate-700 dark:text-white">No Tables Configured</p>
+          <p className="text-slate-500 text-sm mt-1">Ask your manager to set up dining places and tables.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-full gap-6">
+      <div>
+        <h2 className="text-3xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-3">
+          <MapPin className="w-8 h-8 text-orange-500" /> Table Management
+        </h2>
+        <p className="text-slate-500 font-medium text-sm mt-1">View table occupancy across all dining places.</p>
+      </div>
+
+      {zones.map(zone => (
+        <div key={zone.id} className="bg-white/80 dark:bg-[#121214]/80 backdrop-blur-2xl border border-white/40 dark:border-white/5 shadow-2xl rounded-[2rem] p-6 ring-1 ring-black/5 dark:ring-white/10">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="font-bold text-slate-900 dark:text-white text-lg">{zone.icon || '📍'} {zone.name}</h3>
+              <p className="text-xs text-slate-500">{zone.description || `${zone.tables?.length || 0} tables`}</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+            {(zone.tables || []).map((t: any) => {
+              const status = getTableStatus(zone.id, t.tableNumber);
+              return (
+                <div
+                  key={t.tableNumber}
+                  className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 transition-all ${
+                    status === 'occupied'
+                      ? 'bg-red-500/10 border-red-500/30'
+                      : 'bg-green-500/10 border-green-500/30'
+                  }`}
+                >
+                  <span className="font-black text-xl text-slate-900 dark:text-white">{t.tableNumber}</span>
+                  <div className="flex gap-0.5 mt-2">
+                    {Array.from({ length: t.seats || 4 }, (_, i) => (
+                      <div key={i} className={`w-2 h-2 rounded-full ${status === 'occupied' ? 'bg-red-500' : 'bg-green-500'}`} />
+                    ))}
+                  </div>
+                  <span className={`text-[10px] font-bold uppercase mt-2 ${status === 'occupied' ? 'text-red-500' : 'text-green-500'}`}>
+                    {status}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   ChevronLeft, Users, Store, Activity, Settings, 
-  Box, Shield, Sun, Moon, UtensilsCrossed, Search, DollarSign, Calendar, Filter, Printer, Download, TrendingUp, CreditCard, Banknote, Smartphone, Building2
+  Box, Shield, Sun, Moon, UtensilsCrossed, Search, DollarSign, Calendar, Filter, Printer, Download, TrendingUp, CreditCard, Banknote, Smartphone, Building2, LogOut
 } from 'lucide-react';
 import { vibrate } from '@/lib/utils';
 import ManagerMenu from './manager-menu';
@@ -37,7 +37,7 @@ export default function ManagerPage({ user, setView }: { user: any, setView: (v:
   const [dateTo, setDateTo] = useState<string>(() => new Date().toISOString().split('T')[0]);
 
   const activeStaff = dataStore.getStaff().find(s => s.email === user?.email);
-  const managerBranchId = user?.assignedBranchId || activeStaff?.assignedBranchId || (activeStaff?.role === 'Super Admin' ? undefined : activeStaff?.branch);
+  const managerBranchId = user?.assignedBranchId || activeStaff?.assignedBranchId || undefined;
 
   // Data state
   const [orders, setOrders] = useState<any[]>([]);
@@ -265,6 +265,13 @@ export default function ManagerPage({ user, setView }: { user: any, setView: (v:
           >
             <ChevronLeft className="w-4 h-4" />
             Exit Manager
+          </button>
+          <button 
+            onClick={() => { localStorage.removeItem('krown_session_token'); localStorage.removeItem('krown_staff_profile'); sessionStorage.removeItem('krown_active_session'); fetch('/api/auth/logout', { method: 'POST' }).catch(() => {}); window.location.href = '/'; }}
+            className="flex items-center gap-3 px-4 py-3 rounded-2xl font-medium text-red-400 hover:text-red-600 hover:bg-red-500/5 dark:hover:text-red-400 dark:hover:bg-red-500/5 transition-all text-sm"
+          >
+            <LogOut className="w-4 h-4" />
+            Sign Out
           </button>
         </div>
       </aside>
