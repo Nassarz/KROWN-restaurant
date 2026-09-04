@@ -15,20 +15,28 @@ export default function RestaurantDetailPage() {
 
   useEffect(() => {
     const token = localStorage.getItem('krown_session_token') || '';
+    if (!token) {
+      router.replace('/');
+      return;
+    }
     fetch(`/api/super-admin/orgs/${orgId}`, {
       headers: { Authorization: `Bearer ${token}` }
     })
       .then(r => r.json())
       .then(d => {
         if (d.data) setOrg(d.data);
-        else setError(d.error || 'Failed to load restaurant details');
+        else if (d.error === 'Unauthorized') {
+          localStorage.removeItem('krown_session_token');
+          localStorage.removeItem('krown_staff_profile');
+          router.replace('/');
+        } else setError(d.error || 'Failed to load restaurant details');
         setLoading(false);
       })
       .catch(e => {
         setError(e.message || 'Network error');
         setLoading(false);
       });
-  }, [orgId]);
+  }, [orgId, router]);
 
   return (
     <div className="min-h-screen bg-[#F4F4F6] dark:bg-[#0A0A0C] p-6 lg:p-10 font-sans">

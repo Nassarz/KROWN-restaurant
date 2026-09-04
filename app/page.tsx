@@ -50,33 +50,20 @@ function normalizeRole(role: string | null | undefined): StaffMember['role'] {
   return map[role] ?? map[role.toLowerCase()] ?? 'Cashier';
 }
 
-function readCachedStaff(): { user: any; staff: StaffMember; view: 'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | 'super_admin' } | null {
-  try {
-    const cached = localStorage.getItem('krown_staff_profile');
-    if (cached) {
-      const staff = JSON.parse(cached) as StaffMember;
-      if (staff?.id && staff?.email) {
-        const u = { uid: staff.id, displayName: staff.name, email: staff.email, photoURL: staff.avatar };
-        let v: 'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | 'super_admin' = 'pos';
-        if (staff.role === 'Super Admin') v = 'super_admin';
-        else if (staff.role === 'Restaurant Admin') v = 'admin';
-        else if (staff.role === 'Branch Manager') v = 'manager';
-        else if (staff.role === 'Cashier') v = 'cashier';
-        else if (staff.role === 'Head Chef' || staff.role === 'Kitchen Staff') v = 'kitchen';
-        return { user: u, staff, view: v };
-      }
-    }
-  } catch { /* corrupted cache */ }
-  return null;
-}
-
 export default function AppRouter() {
-  const _cached = readCachedStaff();
-  const _hasToken = typeof window !== 'undefined' && !!localStorage.getItem('krown_session_token');
-  const [user, setUser] = useState<any>(_cached?.user ?? null);
-  const [loading, setLoading] = useState(_cached ? false : _hasToken);
-  const [view, setView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | 'super_admin'>(_cached?.view ?? 'pos');
-  const [activeStaff, setActiveStaff] = useState<StaffMember | null>(_cached?.staff ?? null);
+  // Clear session on first page load only — requires fresh auth
+  const [_cached] = useState<null>(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('krown_session_token');
+      localStorage.removeItem('krown_staff_profile');
+      sessionStorage.removeItem('krown_active_session');
+    }
+    return null;
+  });
+  const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [view, setView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | 'super_admin'>('pos');
+  const [activeStaff, setActiveStaff] = useState<StaffMember | null>(null);
   const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
   const [pendingView, setPendingView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | null>(null);
 
