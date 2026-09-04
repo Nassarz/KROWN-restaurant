@@ -49,7 +49,7 @@ export interface StaffMember {
   pinCode?: string; // 4-digit PIN lock code
   idType?: 'National ID' | 'Passport' | 'Student ID';
   idNumber?: string;
-  role: 'Super Admin' | 'Branch Manager' | 'Head Chef' | 'Senior Waiter' | 'Cashier' | 'Kitchen Staff';
+  role: 'Super Admin' | 'Restaurant Admin' | 'Branch Manager' | 'Head Chef' | 'Senior Waiter' | 'Cashier' | 'Kitchen Staff';
   branch: string;
   assignedBranchId?: string;
   status: 'active' | 'on_shift' | 'off_shift' | 'on_leave' | 'paused' | 'banned';
@@ -222,8 +222,9 @@ export interface InventoryMovement {
   createdAt: number;
 }
 
-export const formatUGX = (amount: number): string => {
-  const formatted = Math.round(amount).toLocaleString('en-UG');
+export const formatUGX = (amount: number | null | undefined): string => {
+  const num = Number(amount) || 0;
+  const formatted = Math.round(num).toLocaleString('en-UG');
   return `USh ${formatted}`;
 };
 
@@ -235,116 +236,7 @@ export const PAYMENT_METHODS = [
   { id: 'Corporate Credit', label: 'Corporate Credit', color: 'orange' },
 ] as const;
 
-export const MOCK_PRODUCTS: Product[] = [];
-
-export const MOCK_BRANCHES: Branch[] = [];
-
-export const MOCK_STAFF: StaffMember[] = [
-  {
-    id: 'cd91de98-cfc5-4246-a44a-fc09af98a23d',
-    name: 'Nassar Walusansa (Super Admin)',
-    email: 'admin@krown.ug',
-    role: 'Super Admin',
-    branch: 'Global HQ',
-    assignedBranchId: 'all',
-    status: 'active',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80'
-  }
-];
-
-export const MOCK_INGREDIENTS: Ingredient[] = [];
-
-export const MOCK_ORDERS: Order[] = [];
-
-export const MOCK_AUDIT_LOGS: AuditLog[] = [];
-
-export const MOCK_FINANCIAL_SUMMARY = {
-  currency: 'UGX',
-  grossSalesUGX: 0,
-  taxVAT18PercentUGX: 0,
-  serviceCharge5PercentUGX: 0,
-  netRevenueUGX: 0,
-  totalOrders: 0,
-  averageOrderValueUGX: 0,
-  paymentMethods: [
-    { name: 'MTN Mobile Money', amountUGX: 0, percentage: 0 },
-    { name: 'Airtel Money', amountUGX: 0, percentage: 0 },
-    { name: 'Credit / Debit Card', amountUGX: 0, percentage: 0 },
-    { name: 'Cash', amountUGX: 0, percentage: 0 }
-  ],
-  revenueTrend7Days: []
-};
-
-export const MOCK_COMPANIES: CompanyProfile[] = [];
-
-export const MOCK_COMPANY_STAFF: CompanyStaff[] = [];
-
-export const MOCK_ZONES: PlaceZone[] = [
-  {
-    id: 'zone-1',
-    name: 'F&B Section',
-    icon: '🌿',
-    description: 'Main F&B Dining Area',
-    tables: [
-      { tableNumber: 'E11', shape: 'round', seatsCount: 4, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4'] },
-      { tableNumber: 'E12', shape: 'round', seatsCount: 4, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4'] },
-      { tableNumber: 'E13', shape: 'round', seatsCount: 4, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4'] },
-      { tableNumber: 'E14', shape: 'round', seatsCount: 4, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4'] },
-      { tableNumber: 'E15', shape: 'round', seatsCount: 4, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4'] },
-      { tableNumber: 'E16', shape: 'round', seatsCount: 4, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4'] },
-      { tableNumber: 'E17', shape: 'round', seatsCount: 4, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4'] },
-      { tableNumber: 'E18', shape: 'round', seatsCount: 4, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4'] },
-      { tableNumber: 'E19', shape: 'round', seatsCount: 4, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4'] },
-      { tableNumber: 'E110', shape: 'round', seatsCount: 4, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4'] },
-      { tableNumber: 'E111', shape: 'round', seatsCount: 4, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4'] },
-    ]
-  },
-  {
-    id: 'zone-2',
-    name: 'F&B Lower Section',
-    icon: '🍃',
-    description: 'Lower Terrace Dining Area',
-    tables: [
-      { tableNumber: 'L1', shape: 'rectangle', seatsCount: 6, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4', 'Seat 5', 'Seat 6'] },
-      { tableNumber: 'L2', shape: 'rectangle', seatsCount: 6, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4', 'Seat 5', 'Seat 6'] },
-      { tableNumber: 'L3', shape: 'round', seatsCount: 4, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4'] },
-      { tableNumber: 'L4', shape: 'round', seatsCount: 4, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4'] },
-    ]
-  },
-  {
-    id: 'zone-3',
-    name: 'B Section',
-    icon: '🍷',
-    description: 'Bar & Lounge Dining',
-    tables: [
-      { tableNumber: 'B1', shape: 'round', seatsCount: 2, seats: ['Seat 1', 'Seat 2'] },
-      { tableNumber: 'B2', shape: 'round', seatsCount: 2, seats: ['Seat 1', 'Seat 2'] },
-      { tableNumber: 'B3', shape: 'rectangle', seatsCount: 4, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4'] },
-    ]
-  },
-  {
-    id: 'zone-4',
-    name: 'Joiner Section',
-    icon: '✨',
-    description: 'Large Group Tables',
-    tables: [
-      { tableNumber: 'J1', shape: 'rectangle', seatsCount: 8, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4', 'Seat 5', 'Seat 6', 'Seat 7', 'Seat 8'] },
-      { tableNumber: 'J2', shape: 'rectangle', seatsCount: 8, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4', 'Seat 5', 'Seat 6', 'Seat 7', 'Seat 8'] },
-    ]
-  },
-  {
-    id: 'zone-5',
-    name: 'VIP Lounge',
-    icon: '👑',
-    description: 'Executive Private Dining',
-    tables: [
-      { tableNumber: 'VIP-1', shape: 'rectangle', seatsCount: 6, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4', 'Seat 5', 'Seat 6'] },
-      { tableNumber: 'VIP-2', shape: 'rectangle', seatsCount: 6, seats: ['Seat 1', 'Seat 2', 'Seat 3', 'Seat 4', 'Seat 5', 'Seat 6'] },
-    ]
-  }
-];
-
-export const MOCK_EXPENSES: Expense[] = [];
+// All data is now loaded from the API/database — no mock arrays needed.
 
 export interface PrintJob {
   id: string;

@@ -468,7 +468,7 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
                           type="number"
                           min="0"
                           step="any"
-                          value={a.priceUGX}
+                          value={a.priceUGX ?? ''}
                           onChange={e => {
                             const updated = [...addOns];
                             updated[idx] = { ...updated[idx], priceUGX: e.target.value };

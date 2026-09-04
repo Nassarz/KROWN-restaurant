@@ -6,7 +6,6 @@ import { Lock, ShieldAlert, KeyRound, Mail } from 'lucide-react';
 import { dataStore } from '@/lib/dataStore';
 import { vibrate } from '@/lib/utils';
 import { StaffMember } from '@/lib/mockData';
-import { supabase } from '@/lib/supabase';
 
 interface DashboardAuthProps {
   requiredRole?: 'Super Admin' | 'Branch Manager' | 'Head Chef' | 'Cashier' | 'Senior Waiter' | 'any';
@@ -48,11 +47,28 @@ export default function DashboardAuth({
           return;
         }
 
-        // 1. Primary Auth via Supabase Auth
-        const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-          email: cleanEmail,
-          password: password,
-        });
+        // 1. Primary Auth via Neon API
+        let authData: any = null;
+        let authError: any = null;
+        try {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: cleanEmail, password }),
+          });
+          const json = await res.json();
+          if (!res.ok || !json?.data?.staff) {
+            authError = { message: json?.error || 'Login failed' };
+          } else {
+            authData = json.data;
+            // Store JWT token so subsequent API calls are authenticated
+            if (authData?.token) {
+              localStorage.setItem('krown_session_token', authData.token);
+            }
+          }
+        } catch (e: any) {
+          authError = e;
+        }
 
         if (authError) {
           setErrorMsg('Invalid email or password. Please check your credentials and try again.');
@@ -60,11 +76,11 @@ export default function DashboardAuth({
           return;
         }
 
-        if (authData?.user) {
-          // Find matching staff record by email or auth user id
+        if (authData?.staff) {
+          // Find matching staff record by email or staff id
           const found = staffList.find(s => 
-            s.id === authData.user.id || s.email.toLowerCase() === cleanEmail
-          );
+            s.id === authData.staff.id || s.email.toLowerCase() === cleanEmail
+          ) || authData.staff;
 
           if (!found) {
             setErrorMsg('Authenticated, but no matching staff profile was found in the database.');
@@ -106,14 +122,18 @@ export default function DashboardAuth({
           return;
         }
 
-        // Invoke server-side SECURITY DEFINER RPC function for PIN verification
-        const { data: isValidPin, error: rpcError } = await supabase.rpc('verify_staff_pin', {
-          staff_id: targetStaff.id,
-          pin_attempt: pinAttempt,
-        });
-
-        if (rpcError) {
-          console.warn('[DashboardAuth] PIN RPC error:', rpcError.message);
+        // Invoke server-side PIN verification via Neon API
+        let isValidPin = false;
+        try {
+          const res = await fetch('/api/rpc/verify_staff_pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ staff_id: targetStaff.id, pin_attempt: pinAttempt }),
+          });
+          const json = await res.json();
+          isValidPin = json?.data === true || json?.valid === true;
+        } catch (rpcError: any) {
+          console.warn('[DashboardAuth] PIN verification error:', rpcError.message);
           setErrorMsg('PIN verification failed. Account may be temporarily locked due to failed attempts.');
           setIsSubmitting(false);
           return;
@@ -207,7 +227,7 @@ export default function DashboardAuth({
                   required
                   value={email}
                   onChange={e => setEmail(e.target.value)}
-                  placeholder="staff@krown.ug"
+                  placeholder="your@email.com"
                   className="w-full bg-slate-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-2xl py-3.5 px-4 text-slate-900 dark:text-white font-medium text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
                 />
               </div>

@@ -6,10 +6,10 @@ import AdminPage from '@/components/admin';
 import ManagerPage from '@/components/manager';
 import KitchenPage from '@/components/kitchen';
 import CashierDashboard from '@/components/cashier';
+import SuperAdminDashboard from '@/components/super-admin';
 import DashboardAuth from '@/components/dashboard-auth';
 import { UtensilsCrossed, Lock, Mail, ShieldAlert } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { supabase } from '@/lib/supabase';
 import type { StaffMember } from '@/lib/mockData';
 import { dataStore } from '@/lib/dataStore';
 import {
@@ -20,10 +20,33 @@ import {
   isOffline
 } from '@/lib/offlineAuth';
 
+/**
+ * Normalize DB role names (snake_case) to display role names (Title Case).
+ * DB stores: super_admin, branch_manager, cashier, senior_waiter, head_chef, kitchen_staff
+ * UI expects: Super Admin, Branch Manager, Cashier, Senior Waiter, Head Chef, Kitchen Staff
+ */
+function normalizeRole(role: string | null | undefined): StaffMember['role'] {
+  if (!role) return 'Cashier';
+  const map: Record<string, StaffMember['role']> = {
+    super_admin: 'Super Admin',
+    admin: 'Super Admin',
+    restaurant_admin: 'Restaurant Admin',
+    branch_manager: 'Branch Manager',
+    manager: 'Branch Manager',
+    cashier: 'Cashier',
+    senior_waiter: 'Senior Waiter',
+    waiter: 'Senior Waiter',
+    head_chef: 'Head Chef',
+    chef: 'Head Chef',
+    kitchen_staff: 'Kitchen Staff',
+  };
+  return map[role.toLowerCase()] || 'Cashier';
+}
+
 export default function AppRouter() {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier'>('pos');
+  const [view, setView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | 'super_admin'>('pos');
   const [activeStaff, setActiveStaff] = useState<StaffMember | null>(null);
   const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
   const [pendingView, setPendingView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | null>(null);
@@ -36,132 +59,115 @@ export default function AppRouter() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
 
-  // Presence Tracking for Branch Online / Offline Status
+  // Presence Tracking - disabled
   useEffect(() => {
     if (!activeStaff) {
       dataStore.setOnlineStaffPresence([]);
       return;
     }
-
-    const presenceChannel = supabase.channel('krown-presence-room', {
-      config: { presence: { key: activeStaff.id } }
-    });
-
-    presenceChannel
-      .on('presence', { event: 'sync' }, () => {
-        const state = presenceChannel.presenceState();
-        const onlineUsers: any[] = [];
-        Object.values(state).forEach((presences: any) => {
-          presences.forEach((p: any) => {
-            if (p.staffId) onlineUsers.push(p);
-          });
-        });
-        dataStore.setOnlineStaffPresence(onlineUsers);
-      })
-      .subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-          await presenceChannel.track({
-            staffId: activeStaff.id,
-            email: activeStaff.email,
-            branch: activeStaff.branch,
-            assignedBranchId: activeStaff.assignedBranchId,
-            role: activeStaff.role,
-            onlineAt: Date.now()
-          });
-        }
-      });
-
-    return () => {
-      presenceChannel.unsubscribe();
-    };
+    // Mark current staff as online locally
+    dataStore.setOnlineStaffPresence([{
+      staffId: activeStaff.id,
+      email: activeStaff.email,
+      branch: activeStaff.branch,
+      assignedBranchId: activeStaff.assignedBranchId,
+    }]);
   }, [activeStaff]);
 
   useEffect(() => {
-    const restoreStaffSession = async (authUser: any) => {
-      if (!authUser) { setLoading(false); return; }
-      try {
-        // Try UID first, then email
-        let dbStaff: any = null;
-        const { data: byId } = await supabase.from('staff').select('*').eq('id', authUser.id).maybeSingle();
-        if (byId) {
-          dbStaff = byId;
-        } else {
-          const { data: byEmail } = await supabase.from('staff').select('*').eq('email', authUser.email?.toLowerCase()).maybeSingle();
-          dbStaff = byEmail;
-        }
-
-        if (!dbStaff) {
-          dbStaff = getCachedOfflineProfile(authUser.email || '');
-        }
-
-        if (dbStaff) {
-          const staff: StaffMember = {
-            id: dbStaff.id,
-            name: dbStaff.name || authUser.email?.split('@')[0],
-            email: dbStaff.email || authUser.email,
-            role: dbStaff.role || 'Senior Waiter',
-            branch: dbStaff.branch || 'Global HQ',
-            assignedBranchId: dbStaff.assigned_branch_id || null,
-            status: dbStaff.status || 'active',
-            avatar: dbStaff.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(dbStaff.name || 'Staff')}&background=f97316&color=fff&bold=true&size=200`,
-          };
+    // Fast path: use cached staff profile (instant, no network)
+    try {
+      const cached = localStorage.getItem('krown_staff_profile');
+      if (cached) {
+        const staff = JSON.parse(cached) as StaffMember;
+        if (staff?.id && staff?.email) {
           setUser({ uid: staff.id, displayName: staff.name, email: staff.email, photoURL: staff.avatar });
           setActiveStaff(staff);
-          // Auto-route on session restore
-          if (staff.role === 'Super Admin') setView('admin');
+          if (staff.role === 'Super Admin') setView('super_admin');
+          else if (staff.role === 'Restaurant Admin') setView('admin');
           else if (staff.role === 'Branch Manager') setView('manager');
-          else if (staff.role === 'Cashier') setView('pos');
+          else if (staff.role === 'Cashier') setView('cashier');
           else if (staff.role === 'Head Chef' || staff.role === 'Kitchen Staff') setView('kitchen');
           else setView('pos');
-        }
-      } catch (err) {
-        console.warn('[Supabase Session] Restore error:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    const isTabSessionActive = typeof window !== 'undefined' && sessionStorage.getItem('krown_active_session') === 'true';
-
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session && !isTabSessionActive) {
-        supabase.auth.signOut().then(() => {
-          setUser(null);
-          setActiveStaff(null);
-          setEmail('');
-          setPassword('');
-          setPin('');
-          setView('pos');
           setLoading(false);
-        });
-      } else {
-        restoreStaffSession(session?.user ?? null);
-      }
-    });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_OUT') {
-        setUser(null);
-        setActiveStaff(null);
-        setEmail('');
-        setPassword('');
-        setPin('');
-        setLoginError(null);
-        if (typeof window !== 'undefined') {
-          sessionStorage.removeItem('krown_active_session');
+          return;
         }
-        setView('pos');
-        setLoading(false);
       }
-    });
+    } catch { /* corrupted cache, fall through */ }
 
-    return () => subscription.unsubscribe();
+    // Slow path: validate token with API
+    const token = localStorage.getItem('krown_session_token') || '';
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const apiTimeout = setTimeout(() => controller.abort(), 5000);
+
+    fetch('/api/auth/session', {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    })
+      .then(r => r.json())
+      .then(json => {
+        const authUser = json?.session?.user;
+        if (!authUser) {
+          localStorage.removeItem('krown_session_token');
+          sessionStorage.removeItem('krown_active_session');
+          localStorage.removeItem('krown_staff_profile');
+          return;
+        }
+        const staff: StaffMember = {
+          id: authUser.id,
+          name: authUser.name || authUser.email?.split('@')[0] || 'Staff',
+          email: authUser.email,
+          role: normalizeRole(authUser.role),
+          branch: authUser.branch || authUser.branch_name || 'Global HQ',
+          assignedBranchId: authUser.assigned_branch_id || null,
+          status: authUser.status || 'active',
+          avatar: authUser.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(authUser.name || 'Staff')}&background=f97316&color=fff&bold=true&size=200`,
+        };
+        localStorage.setItem('krown_staff_profile', JSON.stringify(staff));
+        setUser({ uid: staff.id, displayName: staff.name, email: staff.email, photoURL: staff.avatar });
+        setActiveStaff(staff);
+        if (staff.role === 'Super Admin') setView('super_admin');
+        else if (staff.role === 'Restaurant Admin') setView('admin');
+        else if (staff.role === 'Branch Manager') setView('manager');
+        else if (staff.role === 'Cashier') setView('cashier');
+        else if (staff.role === 'Head Chef' || staff.role === 'Kitchen Staff') setView('kitchen');
+        else setView('pos');
+      })
+      .catch(() => {
+        localStorage.removeItem('krown_session_token');
+        sessionStorage.removeItem('krown_active_session');
+        localStorage.removeItem('krown_staff_profile');
+      })
+      .finally(() => {
+        clearTimeout(apiTimeout);
+        setLoading(false);
+        dataStore.refresh().catch(() => {});
+      });
+
+    return () => {
+      controller.abort();
+      clearTimeout(apiTimeout);
+    };
   }, []);
 
-  const handleNavigateWithAuth = (targetView: 'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier') => {
+  const handleNavigateWithAuth = (targetView: 'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | 'super_admin') => {
     const role = activeStaff?.role;
 
     if (role === 'Super Admin') {
+      setView(targetView);
+      return;
+    }
+
+    if (role === 'Restaurant Admin') {
+      if (targetView !== 'admin') {
+        alert('Access Denied: Restaurant Admin accounts can only access the Admin Panel.');
+        return;
+      }
       setView(targetView);
       return;
     }
@@ -197,68 +203,125 @@ export default function AppRouter() {
     setView(targetView);
   };
 
-  const handleGoogleSignIn = async () => {
-    setIsSubmitting(true);
-    setLoginError(null);
-    try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
-        }
-      });
-      if (error) setLoginError(error.message);
-    } catch (err: any) {
-      setLoginError(err?.message || 'Google Sign-In failed.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
   const handlePinLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!email || email.trim() === '') {
+      setLoginError('Please enter your staff email address for PIN login.');
+      return;
+    }
     if (!pin || pin.length < 4) {
-      setLoginError('Please enter a 4-digit PIN code.');
+      setLoginError('Please enter your 4-digit PIN code.');
       return;
     }
     setIsSubmitting(true);
     setLoginError(null);
 
-    const allStaff = dataStore.getStaff();
-    const matched = allStaff.find(s => (s.pinCode && s.pinCode === pin) || (s.id && s.id.endsWith(pin)));
+    const cleanEmail = email.trim().toLowerCase();
+    let foundStaff: StaffMember | undefined;
 
-    if (matched) {
-      const staff: StaffMember = matched;
-      setUser({ uid: staff.id, displayName: staff.name, email: staff.email, photoURL: staff.avatar });
-      setActiveStaff(staff);
-      if (typeof window !== 'undefined') {
-        sessionStorage.setItem('krown_active_session', 'true');
+    try {
+      // ── Server-side PIN verification (Argon2id, lockout protection) ──
+      const res = await fetch('/api/auth/pin-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanEmail, pin }),
+      });
+      const json = await res.json();
+
+      if (res.ok && json?.data?.staff) {
+        const s = json.data.staff;
+        if (json.data.token) {
+          localStorage.setItem('krown_session_token', json.data.token);
+        }
+        foundStaff = {
+          id: s.id,
+          name: s.name || cleanEmail.split('@')[0],
+          email: s.email || cleanEmail,
+          role: normalizeRole(s.role),
+          branch: s.branch || 'Global HQ',
+          assignedBranchId: s.assigned_branch_id || null,
+          status: s.status || 'active',
+          avatar: s.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(s.name || 'Staff')}&background=f97316&color=fff&bold=true&size=200`,
+        };
+      } else {
+        // Server auth failed — try offline only if offline
+        if (!navigator.onLine) {
+          const offlineEntry = await verifyOfflineCredentials(cleanEmail, pin);
+          if (offlineEntry?.staff) {
+            const s = offlineEntry.staff;
+            foundStaff = {
+              id: s.id, name: s.name || cleanEmail.split('@')[0],
+              email: s.email || cleanEmail, role: normalizeRole(s.role),
+              branch: s.branch || 'Global HQ',
+              assignedBranchId: s.assigned_branch_id || s.assignedBranchId || null,
+              status: s.status || 'active',
+              avatar: s.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(s.name || 'Staff')}&background=f97316&color=fff&bold=true&size=200`,
+            };
+          } else {
+            setLoginError('OFFLINE MODE: No cached credentials. Connect to the internet once to cache your login.');
+            setIsSubmitting(false);
+            return;
+          }
+        } else {
+          const msg = json?.error || 'Invalid email or PIN';
+          setLoginError(msg.includes('locked') ? `\uD83D\uDD12 ${msg}` : msg);
+          setIsSubmitting(false);
+          return;
+        }
       }
+    } catch (err: any) {
+      const offlineEntry = await verifyOfflineCredentials(cleanEmail, pin);
+      if (offlineEntry?.staff) {
+        const s = offlineEntry.staff;
+        foundStaff = {
+          id: s.id, name: s.name || cleanEmail.split('@')[0],
+          email: s.email || cleanEmail, role: normalizeRole(s.role),
+          branch: s.branch || 'Global HQ',
+          assignedBranchId: s.assigned_branch_id || s.assignedBranchId || null,
+          status: s.status || 'active',
+          avatar: s.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(s.name || 'Staff')}&background=f97316&color=fff&bold=true&size=200`,
+        };
+      } else {
+        setLoginError('Login error: ' + (err.message || 'Network unavailable'));
+        setIsSubmitting(false);
+        return;
+      }
+    }
 
-      dataStore.logAudit(
-        staff.email,
-        'LOGIN',
-        { method: 'PIN_CODE', staffId: staff.id, role: staff.role },
-        staff.assignedBranchId || undefined,
-        staff.branch || undefined,
-        'PIN Login'
-      );
+    if (foundStaff) {
+      if (foundStaff.status === 'banned') {
+        setLoginError('Access Denied: This account is BANNED.');
+        setIsSubmitting(false);
+        return;
+      }
+      if (foundStaff.status === 'paused') {
+        setLoginError('Account On Hold: Your account is currently paused.');
+        setIsSubmitting(false);
+        return;
+      }
+      setUser({ uid: foundStaff.id, displayName: foundStaff.name, email: foundStaff.email, photoURL: foundStaff.avatar });
+      setActiveStaff(foundStaff);
+      localStorage.setItem('krown_staff_profile', JSON.stringify(foundStaff));
+      if (typeof window !== 'undefined') sessionStorage.setItem('krown_active_session', 'true');
 
-      if (staff.role === 'Super Admin') setView('admin');
-      else if (staff.role === 'Branch Manager') setView('manager');
-      else if (staff.role === 'Cashier') setView('pos');
-      else if (staff.role === 'Head Chef' || staff.role === 'Kitchen Staff') setView('kitchen');
+      // Set view IMMEDIATELY for instant UI transition
+      if (foundStaff.role === 'Super Admin') setView('super_admin');
+      else if (foundStaff.role === 'Restaurant Admin') setView('admin');
+      else if (foundStaff.role === 'Branch Manager') setView('manager');
+      else if (foundStaff.role === 'Cashier') setView('cashier');
+      else if (foundStaff.role === 'Head Chef' || foundStaff.role === 'Kitchen Staff') setView('kitchen');
       else setView('pos');
 
       setEmail('');
       setPassword('');
       setPin('');
       setIsSubmitting(false);
-      return;
-    }
 
-    setLoginError('Invalid PIN code. Please verify your PIN or use Password Login.');
-    setIsSubmitting(false);
+      // Load data in background AFTER view transition
+      requestAnimationFrame(() => { dataStore.refresh().catch(() => {}); });
+    } else {
+      setIsSubmitting(false);
+    }
   };
 
   const handleStaffLogin = async (e: React.FormEvent) => {
@@ -281,12 +344,21 @@ export default function AppRouter() {
     let authData: any = null;
     let authError: any = null;
     try {
-      const res = await supabase.auth.signInWithPassword({
-        email: cleanEmail,
-        password: password,
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanEmail, password }),
       });
-      authData = res.data;
-      authError = res.error;
+      const json = await res.json();
+      if (!res.ok || !json?.data?.staff) {
+        authError = { message: json?.error || 'Login failed' };
+      } else {
+        authData = json.data;
+        // Store JWT token so dataStore.refresh() and subsequent API calls are authenticated
+        if (authData?.token) {
+          localStorage.setItem('krown_session_token', authData.token);
+        }
+      }
     } catch (e: any) {
       authError = e;
     }
@@ -299,7 +371,7 @@ export default function AppRouter() {
           id: s.id,
           name: s.name || cleanEmail.split('@')[0],
           email: s.email || cleanEmail,
-          role: s.role || 'Senior Waiter',
+          role: normalizeRole(s.role),
           branch: s.branch || 'Global HQ',
           assignedBranchId: s.assigned_branch_id || s.assignedBranchId || null,
           status: s.status || 'active',
@@ -326,17 +398,35 @@ export default function AppRouter() {
       return;
     }
 
-    if (authData?.user) {
+    // Login API already returns staff data - use it directly (no extra queries!)
+    if (authData?.staff) {
+      const s = authData.staff;
+      foundStaff = {
+        id: s.id,
+        name: s.name || cleanEmail.split('@')[0],
+        email: s.email || cleanEmail,
+        role: normalizeRole(s.role),
+        branch: s.branch || 'Global HQ',
+        assignedBranchId: s.assigned_branch_id || null,
+        status: s.status || 'active',
+        avatar: s.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(s.name || 'Staff')}&background=f97316&color=fff&bold=true&size=200`,
+      };
+    } else if (authData?.user) {
+      // Fallback: fetch staff from Neon API
       const authUid = authData.user.id;
       const authEmail = authData.user.email?.toLowerCase() || cleanEmail;
-
       let dbStaff: any = null;
-      const { data: byId } = await supabase.from('staff').select('*').eq('id', authUid).maybeSingle();
-      if (byId) {
-        dbStaff = byId;
-      } else {
-        const { data: byEmail } = await supabase.from('staff').select('*').eq('email', authEmail).maybeSingle();
-        dbStaff = byEmail;
+      try {
+        const res = await fetch(`/api/db/staff?where=${encodeURIComponent(JSON.stringify({ id: authUid }))}&limit=1`);
+        const { data } = await res.json();
+        if (data?.length) dbStaff = data[0];
+      } catch { /* fall through */ }
+      if (!dbStaff) {
+        try {
+          const res = await fetch(`/api/db/staff?where=${encodeURIComponent(JSON.stringify({ email: authEmail }))}&limit=1`);
+          const { data } = await res.json();
+          if (data?.length) dbStaff = data[0];
+        } catch { /* fall through */ }
       }
 
       if (dbStaff) {
@@ -344,55 +434,29 @@ export default function AppRouter() {
           id: dbStaff.id,
           name: dbStaff.name || authEmail.split('@')[0],
           email: dbStaff.email || authEmail,
-          role: dbStaff.role || 'Senior Waiter',
+          role: normalizeRole(dbStaff.role),
           branch: dbStaff.branch || 'Global HQ',
           assignedBranchId: dbStaff.assigned_branch_id || null,
           status: dbStaff.status || 'active',
           avatar: dbStaff.avatar ||
             `https://ui-avatars.com/api/?name=${encodeURIComponent(dbStaff.name || 'Staff')}&background=f97316&color=fff&bold=true&size=200`,
         };
-      } else {
-        const displayName = authData.user.user_metadata?.name || authData.user.user_metadata?.full_name || authEmail.split('@')[0];
-        const assignedRole = authData.user.user_metadata?.role || (authEmail.includes('admin') ? 'Super Admin' : 'Senior Waiter');
-        const assignedBranch = authData.user.user_metadata?.branch || (assignedRole === 'Super Admin' ? 'Global HQ' : 'FAZE 3');
-        const assignedBranchId = authData.user.user_metadata?.assignedBranchId || null;
-
-        foundStaff = {
-          id: authUid,
-          name: displayName,
-          email: authEmail,
-          role: assignedRole,
-          branch: assignedBranch,
-          assignedBranchId: assignedBranchId,
-          status: 'active',
-          avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=f97316&color=fff&bold=true&size=200`,
-        };
-
-        await supabase.from('staff').upsert({
-          id: authUid,
-          name: displayName,
-          email: authEmail,
-          role: assignedRole,
-          branch: assignedBranch,
-          status: 'active',
-          assigned_branch_id: assignedBranchId,
-          avatar: foundStaff.avatar,
-          created_at: Date.now(),
-        }, { onConflict: 'id' });
       }
     }
 
     if (foundStaff) {
       if (foundStaff.status === 'banned') {
         setLoginError('Access Denied: This staff account is BANNED by Admin.');
-        await supabase.auth.signOut();
+        fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+        localStorage.removeItem('krown_staff_profile');
         setIsSubmitting(false);
         return;
       }
 
       if (foundStaff.status === 'paused') {
         setLoginError('Account On Hold: Your shift account is currently paused.');
-        await supabase.auth.signOut();
+        fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+        localStorage.removeItem('krown_staff_profile');
         setIsSubmitting(false);
         return;
       }
@@ -407,15 +471,17 @@ export default function AppRouter() {
         sessionStorage.setItem('krown_active_session', 'true');
       }
       setActiveStaff(foundStaff);
+      localStorage.setItem('krown_staff_profile', JSON.stringify(foundStaff));
 
       try {
         await storeOfflinePasswordHash(cleanEmail, password);
-        await cacheOfflineAuth(foundStaff, { uid: foundStaff.id, displayName: foundStaff.name, email: foundStaff.email, photoURL: foundStaff.avatar });
+        await cacheOfflineAuth(foundStaff);
       } catch { /* non-fatal */ }
 
-      if (foundStaff.role === 'Super Admin') setView('admin');
+      if (foundStaff.role === 'Super Admin') setView('super_admin');
+      else if (foundStaff.role === 'Restaurant Admin') setView('admin');
       else if (foundStaff.role === 'Branch Manager') setView('manager');
-      else if (foundStaff.role === 'Cashier') setView('pos');
+      else if (foundStaff.role === 'Cashier') setView('cashier');
       else if (foundStaff.role === 'Head Chef' || foundStaff.role === 'Kitchen Staff') setView('kitchen');
       else setView('pos');
 
@@ -423,6 +489,9 @@ export default function AppRouter() {
       setPassword('');
       setPin('');
       setIsSubmitting(false);
+
+      // Load data in background AFTER view transition
+      requestAnimationFrame(() => { dataStore.refresh().catch(() => {}); });
       return;
     }
 
@@ -431,13 +500,7 @@ export default function AppRouter() {
   };
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#F4F4F6] dark:bg-[#0A0A0C]">
-        <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }}>
-          <UtensilsCrossed className="w-10 h-10 text-orange-500" />
-        </motion.div>
-      </div>
-    );
+    return null;
   }
 
   if (!user) {
@@ -498,7 +561,7 @@ export default function AppRouter() {
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder="admin@krown.ug"
+                      placeholder="your@email.com"
                       className="w-full bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/10 rounded-2xl py-3.5 pl-12 pr-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/50 transition-all text-sm font-medium"
                     />
                   </div>
@@ -522,23 +585,41 @@ export default function AppRouter() {
                 </div>
               </>
             ) : (
-              <div>
-                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-2">
-                  Staff 4-Digit Security PIN
-                </label>
-                <div className="relative">
-                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                  <input
-                    type="password"
-                    maxLength={6}
-                    required
-                    value={pin}
-                    onChange={(e) => setPin(e.target.value)}
-                    placeholder="Enter 4-digit PIN..."
-                    className="w-full bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/10 rounded-2xl py-3.5 pl-12 pr-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/50 transition-all text-sm font-medium tracking-widest text-center text-lg"
-                  />
+              <>
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-2">
+                    Staff Email
+                  </label>
+                  <div className="relative">
+                    <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                    <input
+                      type="email"
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="your@email.com"
+                      className="w-full bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/10 rounded-2xl py-3.5 pl-12 pr-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/50 transition-all text-sm font-medium"
+                    />
+                  </div>
                 </div>
-              </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-2">
+                    4-Digit Security PIN
+                  </label>
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                    <input
+                      type="password"
+                      maxLength={6}
+                      required
+                      value={pin}
+                      onChange={(e) => setPin(e.target.value)}
+                      placeholder="Enter 4-digit PIN..."
+                      className="w-full bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/10 rounded-2xl py-3.5 pl-12 pr-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/50 transition-all text-sm font-medium tracking-widest text-center text-lg"
+                    />
+                  </div>
+                </div>
+              </>
             )}
 
             {loginError && (
@@ -554,31 +635,10 @@ export default function AppRouter() {
               className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white py-4 rounded-2xl font-bold shadow-lg shadow-orange-500/30 transition-all active:scale-[0.98] text-center flex items-center justify-center gap-2"
             >
               {isSubmitting ? (
-                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                <><div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> <span className="text-sm">Verifying...</span></>
               ) : (
                 loginMode === 'pin' ? 'Unlock POS with PIN' : 'Log In to Staff Dashboard'
               )}
-            </button>
-
-            {/* Google OAuth Login Button */}
-            <div className="relative my-4">
-              <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-black/5 dark:border-white/10" /></div>
-              <div className="relative flex justify-center text-xs font-semibold uppercase"><span className="bg-white dark:bg-[#121214] px-2 text-slate-400">Or Continue With</span></div>
-            </div>
-
-            <button
-              type="button"
-              onClick={handleGoogleSignIn}
-              disabled={isSubmitting}
-              className="w-full bg-slate-50 dark:bg-white/5 hover:bg-slate-100 dark:hover:bg-white/10 text-slate-900 dark:text-white py-3.5 rounded-2xl font-bold text-xs flex items-center justify-center gap-3 transition-all border border-black/5 dark:border-white/10"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24">
-                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                <path fill="#FBBC05" d="M5.84 14.1c-.22-.66-.35-1.36-.35-2.1s.13-1.44.35-2.1V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.62z"/>
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
-              </svg>
-              <span>Sign in with Google Account</span>
             </button>
           </form>
 
@@ -614,6 +674,11 @@ export default function AppRouter() {
         {view === 'admin' && (
           <motion.div key="admin" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -15 }} transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }} className="min-h-screen w-full absolute top-0 left-0 bg-[#F4F4F6] dark:bg-[#0A0A0C]">
             <AdminPage user={user} setView={handleNavigateWithAuth} />
+          </motion.div>
+        )}
+        {view === 'super_admin' && (
+          <motion.div key="super_admin" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -15 }} transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }} className="min-h-screen w-full absolute top-0 left-0 bg-[#F4F4F6] dark:bg-[#0A0A0C]">
+            <SuperAdminDashboard user={user} setView={handleNavigateWithAuth} activeStaff={activeStaff} />
           </motion.div>
         )}
         {view === 'manager' && (

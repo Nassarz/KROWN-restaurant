@@ -1,15 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { extractTenantContext } from '@/lib/tenant';
+import { hasPermission } from '@/lib/rbac';
 
 export async function POST(req: NextRequest) {
+  const ctx = extractTenantContext(req);
+  if (!ctx) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  if (!hasPermission(ctx.role, 'upload:upload')) {
+    return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+  }
+
   try {
     const formData = await req.formData();
     const file = formData.get('image') as File | null;
-    
+
     if (!file) {
       return NextResponse.json({ error: 'No image provided' }, { status: 400 });
     }
 
-    // Security Hardening: Validate file size (max 5MB) and type
     const MAX_SIZE = 5 * 1024 * 1024;
     if (file.size > MAX_SIZE) {
       return NextResponse.json({ error: 'File size exceeds 5MB limit' }, { status: 400 });
@@ -25,8 +35,7 @@ export async function POST(req: NextRequest) {
     const dataUrl = `data:${mimeType};base64,${base64Image}`;
 
     const apiKey = process.env.IMGBB_API_KEY;
-    
-    // If ImgBB API key is provided, upload to ImgBB cloud storage
+
     if (apiKey && apiKey.trim().length > 0) {
       try {
         const imgbbFormData = new FormData();
@@ -41,15 +50,14 @@ export async function POST(req: NextRequest) {
         const data = await response.json();
 
         if (data.success && data.data?.url) {
-          return NextResponse.json({ url: data.data.url });
+          return NextResponse.json({ data: { url: data.data.url } });
         }
       } catch (imgbbErr) {
         console.warn('IMGBB Upload warning, falling back to data URL:', imgbbErr);
       }
     }
 
-    // Graceful fallback: return data URL so product image upload always works smoothly
-    return NextResponse.json({ url: dataUrl });
+    return NextResponse.json({ data: { url: dataUrl } });
   } catch (error) {
     console.error('Upload Error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

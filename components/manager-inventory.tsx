@@ -348,7 +348,7 @@ export default function ManagerInventory({ ingredients, user, branchId }: { ingr
                       type="number"
                       min={0}
                       step="any"
-                      value={item.quantity}
+                      value={item.quantity ?? ''}
                       onChange={(e) => handleSetStock(item.id, e.target.value)}
                       className="w-16 text-center font-black text-sm text-slate-900 dark:text-white bg-transparent focus:outline-none focus:ring-2 focus:ring-orange-500 rounded-lg"
                       title="Remaining stock — type to set exact quantity"

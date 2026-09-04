@@ -1,26 +1,21 @@
 /**
- * KROWN ERP - Comprehensive Offline Sync Engine
+ * KROWN ERP - Offline Sync Engine (SaaS Version)
  * 
- * Stores all write operations in IndexedDB when offline.
- * Automatically replays the operation queue when connectivity is restored.
- * Works with any Supabase table: orders, branches, staff, products, ingredients,
- * zones, companies, company_staff, expenses, audit_logs.
+ * Stores write operations in IndexedDB when offline.
+ * Replays them through authenticated API endpoints when back online.
  */
 
 import { openDB, IDBPDatabase } from 'idb';
-import { supabase } from './supabase';
 
 const DB_NAME = 'KrownPOS_OfflineDB';
-const DB_VERSION = 2;
-const QUEUE_STORE = 'op_queue';        // Pending write operations
-const ORDERS_STORE = 'offline_orders'; // Legacy: cached orders
+const DB_VERSION = 3;
+const QUEUE_STORE = 'op_queue';
 
 export interface OfflineOp {
   id?: number;
-  table: string;
-  method: 'upsert' | 'update' | 'insert' | 'delete';
-  payload: any;
-  conflictKey?: string; // e.g. 'id'
+  endpoint: string;    // e.g. '/api/products', '/api/orders'
+  method: string;      // 'POST', 'PUT', 'DELETE'
+  body: any;
   timestamp: number;
   retries: number;
 }
@@ -30,14 +25,9 @@ let _db: IDBPDatabase | null = null;
 export async function getDB(): Promise<IDBPDatabase> {
   if (_db) return _db;
   _db = await openDB(DB_NAME, DB_VERSION, {
-    upgrade(db, oldVersion) {
-      // Op queue store
+    upgrade(db) {
       if (!db.objectStoreNames.contains(QUEUE_STORE)) {
         db.createObjectStore(QUEUE_STORE, { keyPath: 'id', autoIncrement: true });
-      }
-      // Legacy orders store (for backward compat with existing code)
-      if (!db.objectStoreNames.contains(ORDERS_STORE)) {
-        db.createObjectStore(ORDERS_STORE, { keyPath: 'id', autoIncrement: true });
       }
     }
   });
@@ -45,24 +35,25 @@ export async function getDB(): Promise<IDBPDatabase> {
 }
 
 /**
- * Queue a write operation to be replayed when back online.
- * Called automatically from dataStore.ts when a write fails or when offline.
+ * Queue a write operation for offline replay.
+ * endpoint: the API endpoint (e.g. '/api/products', '/api/orders/123/status')
+ * method: HTTP method (POST, PUT, DELETE)
+ * body: the request body
  */
-export async function queueOfflineOp(op: Omit<OfflineOp, 'id' | 'timestamp' | 'retries'>) {
+export async function queueOfflineOp(op: { endpoint: string; method: string; body: any }) {
   try {
     const db = await getDB();
     await db.add(QUEUE_STORE, {
       ...op,
       timestamp: Date.now(),
-      retries: 0
+      retries: 0,
     } as OfflineOp);
-    console.log('[OfflineSync] Queued op for table:', op.table, op.method);
+    console.log('[OfflineSync] Queued op:', op.method, op.endpoint);
     notifySyncListeners();
 
-    // If online, attempt background auto-flush immediately
     if (typeof navigator !== 'undefined' && navigator.onLine) {
       setTimeout(() => {
-        syncOfflineQueue().catch(err => console.warn('[OfflineSync] Auto-flush notice:', err));
+        syncOfflineQueue().catch(err => console.warn('[OfflineSync] Auto-flush error:', err));
       }, 150);
     }
   } catch (e) {
@@ -70,9 +61,6 @@ export async function queueOfflineOp(op: Omit<OfflineOp, 'id' | 'timestamp' | 'r
   }
 }
 
-/**
- * Get count of pending offline operations.
- */
 export async function getPendingOpCount(): Promise<number> {
   try {
     const db = await getDB();
@@ -83,8 +71,7 @@ export async function getPendingOpCount(): Promise<number> {
 }
 
 /**
- * Replay all queued operations against Supabase.
- * Called automatically when the browser comes back online.
+ * Replay all queued operations through authenticated endpoints.
  */
 export async function syncOfflineQueue(): Promise<{ synced: number; failed: number }> {
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -101,43 +88,27 @@ export async function syncOfflineQueue(): Promise<{ synced: number; failed: numb
 
   for (const op of ops) {
     try {
-      let error: any = null;
+      const res = await fetch(op.endpoint, {
+        method: op.method,
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(op.body),
+      });
 
-      if (op.method === 'upsert') {
-        const { error: e } = await supabase.from(op.table).upsert(op.payload, {
-          onConflict: op.conflictKey || 'id'
-        });
-        error = e;
-      } else if (op.method === 'insert') {
-        const { error: e } = await supabase.from(op.table).insert(op.payload);
-        error = e;
-      } else if (op.method === 'update') {
-        const { id, ...updates } = op.payload;
-        const { error: e } = await supabase.from(op.table).update(updates).eq('id', id);
-        error = e;
-      } else if (op.method === 'delete') {
-        if (op.payload?.where) {
-          let query: any = supabase.from(op.table).delete();
-          Object.entries(op.payload.where).forEach(([col, val]) => {
-            query = query.eq(col, val);
-          });
-          const { error: e } = await query;
-          error = e;
-        } else {
-          const { error: e } = await supabase.from(op.table).delete().eq('id', op.payload.id);
-          error = e;
-        }
-      }
-
-      if (!error) {
+      if (res.ok) {
         await db.delete(QUEUE_STORE, op.id!);
         synced++;
-        console.log(`[OfflineSync] ✓ Synced op: ${op.table} ${op.method}`);
+        console.log(`[OfflineSync] ✓ Synced: ${op.method} ${op.endpoint}`);
+      } else if (res.status === 401) {
+        // Auth issue — clear the op (can't replay without login)
+        await db.delete(QUEUE_STORE, op.id!);
+        console.warn(`[OfflineSync] Cleared op (auth expired): ${op.method} ${op.endpoint}`);
+        failed++;
       } else {
         const newRetries = (op.retries || 0) + 1;
-        if (newRetries >= 2 || error.code === '23505' || error.message?.includes('duplicate') || error.message?.includes('violates')) {
+        if (newRetries >= 3) {
           await db.delete(QUEUE_STORE, op.id!);
-          console.warn(`[OfflineSync] ✗ Cleared op after retry/conflict (${error.message}): ${op.table} ${op.method}`);
+          console.warn(`[OfflineSync] Cleared op after ${newRetries} retries: ${op.method} ${op.endpoint}`);
         } else {
           await db.put(QUEUE_STORE, { ...op, retries: newRetries });
         }
@@ -145,7 +116,7 @@ export async function syncOfflineQueue(): Promise<{ synced: number; failed: numb
       }
     } catch (e) {
       failed++;
-      console.warn(`[OfflineSync] ✗ Error replaying op:`, op.table, op.method, e);
+      console.warn(`[OfflineSync] Error replaying:`, op.method, op.endpoint, e);
     }
   }
 
@@ -153,50 +124,20 @@ export async function syncOfflineQueue(): Promise<{ synced: number; failed: numb
   return { synced, failed };
 }
 
-// ── Legacy compat: save an order for offline and sync when online ─────────────
-export async function saveOfflineOrder(orderData: any) {
-  const db = await getDB();
-  await db.add(ORDERS_STORE, { ...orderData, timestamp: Date.now() });
-}
-
-export async function syncOfflineOrders() {
-  if (!navigator.onLine) return;
-  const db = await getDB();
-  const orders = await db.getAll(ORDERS_STORE);
-  if (orders.length === 0) return;
-  for (const order of orders) {
-    try {
-      const { id, ...orderData } = order;
-      const orderId = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
-      const { error } = await supabase.from('orders').upsert({
-        ...orderData,
-        id: orderId,
-        synced: true,
-        updated_at: Date.now()
-      }, { onConflict: 'id' });
-      if (!error) await db.delete(ORDERS_STORE, id);
-    } catch (e) {
-      console.warn('[OfflineSync] Failed to sync order:', e);
-    }
-  }
-}
-
 /**
- * Clear ALL pending offline ops from the queue.
- * Used by the manual sync UI when the user wants to dismiss stuck ops.
+ * Clear ALL pending offline ops.
  */
 export async function clearAllPendingOps(): Promise<void> {
   try {
     const db = await getDB();
     await db.clear(QUEUE_STORE);
     notifySyncListeners();
-    console.log('[OfflineSync] Cleared all pending ops from queue');
+    console.log('[OfflineSync] Cleared all pending ops');
   } catch (e) {
     console.warn('[OfflineSync] Error clearing queue:', e);
   }
 }
 
-/** Alias for manual sync trigger from UI */
 export const forceSyncNow = syncOfflineQueue;
 
 // ── Sync Event Listeners ──────────────────────────────────────────────────────
@@ -220,22 +161,35 @@ export function initAutoSync() {
   if (autoSyncInitialized || typeof window === 'undefined') return;
   autoSyncInitialized = true;
 
+  // Clear stale ops on startup
+  (async () => {
+    try {
+      const db = await getDB();
+      const ops: OfflineOp[] = await db.getAll(QUEUE_STORE);
+      const stale = ops.filter(op => (op.retries || 0) >= 2);
+      if (stale.length > 0) {
+        console.warn(`[OfflineSync] Clearing ${stale.length} stale ops`);
+        for (const op of stale) {
+          await db.delete(QUEUE_STORE, op.id!);
+        }
+      }
+    } catch { /* ignore */ }
+  })();
+
   const handleOnline = async () => {
-    console.log('[OfflineSync] Back online — syncing queue...');
+    console.log('[OfflineSync] Back online — syncing...');
     const result = await syncOfflineQueue();
-    await syncOfflineOrders();
     if (result.synced > 0) {
-      console.log(`[OfflineSync] Sync complete: ${result.synced} ops synced, ${result.failed} failed`);
+      console.log(`[OfflineSync] Sync complete: ${result.synced} synced, ${result.failed} failed`);
     }
   };
 
   window.addEventListener('online', handleOnline);
 
-  // Also sync on initial load if online and there are pending ops
   if (navigator.onLine) {
     setTimeout(() => {
       syncOfflineQueue().then(r => {
-        if (r.synced > 0) console.log(`[OfflineSync] Initial sync: ${r.synced} ops synced`);
+        if (r.synced > 0) console.log(`[OfflineSync] Initial sync: ${r.synced} synced`);
       });
     }, 3000);
   }

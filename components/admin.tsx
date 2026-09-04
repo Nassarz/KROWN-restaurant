@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  ChevronLeft, Users, Store, Activity, Settings, 
+  ChevronLeft, Users, Store, Activity, Settings, LogOut,
   TrendingUp, Box, Shield, Sun, Moon, UtensilsCrossed, Receipt, CreditCard, Banknote, Smartphone, Percent,
   Calendar, Filter, Plus, DollarSign, FileText, Upload, Search, Printer, Download
 } from 'lucide-react';
@@ -156,7 +156,7 @@ export default function AdminPage({ user, setView }: { user: any, setView: (v: '
 
     dataStore.addExpense({
       branchId: selectedBranchId !== 'all' ? selectedBranchId : 'br-1',
-      branchName: targetBranch?.name || 'Krown Kampala Central',
+      branchName: targetBranch?.name || 'Main Branch',
       title: expTitle.trim(),
       category: expCategory,
       amountUGX: Number(expAmount),
@@ -227,11 +227,11 @@ export default function AdminPage({ user, setView }: { user: any, setView: (v: '
             Toggle Theme
           </button>
           <button 
-            onClick={() => { vibrate(30); setView('pos'); }}
-            className="flex items-center gap-3 px-4 py-3 rounded-2xl font-medium text-slate-500 hover:text-slate-900 hover:bg-slate-200/50 dark:hover:text-white dark:hover:bg-white/5 transition-all text-sm"
+            onClick={() => { localStorage.removeItem('krown_session_token'); localStorage.removeItem('krown_staff_profile'); sessionStorage.removeItem('krown_active_session'); fetch('/api/auth/logout', { method: 'POST' }).catch(() => {}); window.location.href = '/'; }}
+            className="flex items-center gap-3 px-4 py-3 rounded-2xl font-medium text-red-400 hover:text-red-600 hover:bg-red-500/5 dark:hover:text-red-400 dark:hover:bg-red-500/5 transition-all text-sm"
           >
-            <ChevronLeft className="w-4 h-4" />
-            Exit Admin
+            <LogOut className="w-4 h-4" />
+            Sign Out
           </button>
         </div>
       </aside>

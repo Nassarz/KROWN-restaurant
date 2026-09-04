@@ -110,8 +110,8 @@ export async function sendToNetworkPrinter(
     console.log(`[PrintBridge] Job ${jobId} (${type}) sent to bridge.`);
     return true;
   } catch (err: any) {
-    console.error(`[PrintBridge] Job ${jobId} bridge unreachable: ${err.message}`);
-    dataStore.updatePrintJobStatus(jobId, 'FAILED', { lastError: `Bridge offline: ${err.message}`, attempts: 1 });
+    console.warn(`[PrintBridge] Job ${jobId} bridge offline (printer not connected): ${err.message}`);
+    dataStore.updatePrintJobStatus(jobId, 'QUEUED', { lastError: `Bridge offline: ${err.message}`, attempts: 1 });
     return false;
   }
 }

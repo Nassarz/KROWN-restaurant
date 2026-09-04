@@ -2,6 +2,7 @@ import { formatUGX } from './mockData';
 import { sendToNetworkPrinter, getPrinterConfig } from './printBridge';
 import { jsPDF } from 'jspdf';
 import { dataStore } from './dataStore';
+import { generateId } from './id';
 
 function wrapText(text: string, maxLength: number): string[] {
   const words = text.split(' ');
@@ -92,7 +93,7 @@ export function generateFormattedThermalReceipt(
   }
 
   const dateStr = new Date(order.createdAt || Date.now()).toLocaleString();
-  const branchName = order.branchName || 'Krown Kampala';
+  const branchName = order.branchName || 'Main Branch';
   const branchAddress = order.branchAddress || order.branchLocation || order.location || 'Kampala, Uganda';
   const branchPhone = order.branchPhone || '';
   const branchTaxId = order.branchTaxId || '';
@@ -274,7 +275,7 @@ export async function printTicket(
   const formattedText = generateFormattedThermalReceipt(order, paperWidth, ticketType, splitData);
 
   const kind: 'kitchen' | 'receipt' = ticketType === 'prep' ? 'kitchen' : 'receipt';
-  const jobId = `job-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  const jobId = generateId();
   const typeMap = {
     'prep': 'KITCHEN_TICKET',
     'cashier_order': 'BILL',

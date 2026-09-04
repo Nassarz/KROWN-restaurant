@@ -10,7 +10,7 @@ import {
 import { dataStore } from '@/lib/dataStore';
 import { StaffMember, Branch } from '@/lib/mockData';
 import { uploadImageFile } from '@/lib/imageUpload';
-import { supabase } from '@/lib/supabase';
+
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function mapDbToStaff(row: any): StaffMember {
@@ -53,28 +53,16 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [creationResult, setCreationResult] = useState<{ success: boolean; msg: string } | null>(null);
 
-  // ── Load staff from Supabase ──────────────────────────────────────────────
+  // ── Load staff from Neon API ──────────────────────────────────────────────
   const loadStaff = useCallback(async () => {
     setIsLoading(true);
     try {
-      let query = supabase.from('staff').select('*').order('created_at', { ascending: false });
-      const b = currentBranchId ? dataStore.getBranches().find(x => x.id === currentBranchId) : undefined;
-      if (currentBranchId && currentBranchId !== 'all') {
-        if (b) {
-          query = supabase.from('staff').select('*')
-            .or(`assigned_branch_id.eq.${currentBranchId},branch.eq.${b.name}`)
-            .order('created_at', { ascending: false });
-        } else {
-          query = supabase.from('staff').select('*')
-            .eq('assigned_branch_id', currentBranchId)
-            .order('created_at', { ascending: false });
-        }
-      }
-      const { data, error } = await query;
-      if (error) throw error;
+      const res = await fetch('/api/db/staff?orderBy=created_at&orderDir=DESC');
+      const { data } = await res.json();
       let mapped = (data || []).map(mapDbToStaff);
       if (currentBranchId && currentBranchId !== 'all') {
-        mapped = mapped.filter(s => s.role !== 'Super Admin' && (s.assignedBranchId === currentBranchId || s.branch === currentBranchId || (b && s.branch === b.name)));
+        const b = dataStore.getBranches().find(x => x.id === currentBranchId);
+        mapped = mapped.filter((s: any) => s.role !== 'Super Admin' && (s.assignedBranchId === currentBranchId || s.branch === currentBranchId || (b && s.branch === b.name)));
       }
       setStaff(mapped);
       dataStore.syncStaffFromDB(mapped);
@@ -89,9 +77,10 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
   // ── Load branches ─────────────────────────────────────────────────────────
   const loadBranches = useCallback(async () => {
     try {
-      const { data } = await supabase.from('branches').select('*').order('name');
+      const res = await fetch('/api/db/branches?orderBy=name&orderDir=ASC');
+      const { data } = await res.json();
       if (data && data.length > 0) {
-        const mapped: Branch[] = data.map(b => ({
+        const mapped: Branch[] = data.map((b: any) => ({
           id: b.id,
           name: b.name,
           location: b.location,
@@ -117,9 +106,9 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
   useEffect(() => {
     (async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const token = typeof window !== 'undefined' ? localStorage.getItem('krown_session_token') : null;
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+        if (token) headers['Authorization'] = `Bearer ${token}`;
 
         const res = await fetch('/api/admin/sync-staff', { method: 'POST', headers });
         const json = await res.json();
@@ -137,16 +126,7 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadStaff();
     loadBranches();
-
-    // Subscribe to real-time changes in the staff table
-    const channel = supabase
-      .channel('staff_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'staff' }, () => {
-        loadStaff();
-      })
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
+    return () => {};
   }, [loadStaff, loadBranches]);
 
   // ── Toast helper ──────────────────────────────────────────────────────────
@@ -177,9 +157,9 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
     const staffEmail = email.trim() || `${name.toLowerCase().replace(/\s+/g, '.')}@krownpos.com`;
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const token = typeof window !== 'undefined' ? localStorage.getItem('krown_session_token') : null;
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+      if (token) headers['Authorization'] = `Bearer ${token}`;
 
       const res = await fetch('/api/admin/create-staff', {
         method: 'POST',
@@ -247,9 +227,9 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
         setStaff(prev => prev.map(s => s.id === staffMember.id ? { ...s, role: 'Super Admin', branch: 'Global HQ' } : s));
       }
 
-      const { data: { session } } = await supabase.auth.getSession();
+      const token = typeof window !== 'undefined' ? localStorage.getItem('krown_session_token') : null;
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+      if (token) headers['Authorization'] = `Bearer ${token}`;
 
       const res = await fetch('/api/admin/manage-staff', {
         method: 'POST',
@@ -259,7 +239,7 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
       const json = await res.json();
       if (json.success) {
         showToast('success', json.message || 'Action completed successfully');
-        await loadStaff(); // Refresh from Supabase
+        await loadStaff();
       } else {
         showToast('error', json.error || 'Action failed');
       }
@@ -295,7 +275,7 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
             Staff & Personnel
           </h2>
           <p className="text-slate-500 font-medium text-sm mt-0.5">
-            {staff.length} staff member{staff.length !== 1 ? 's' : ''} enrolled · roles managed via Supabase Auth
+            {staff.length} staff member{staff.length !== 1 ? 's' : ''} enrolled
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -340,7 +320,7 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
         {isLoading ? (
           <div className="flex flex-col items-center justify-center py-24 gap-4">
             <Loader2 className="w-8 h-8 text-orange-500 animate-spin" />
-            <p className="text-slate-500 font-medium text-sm">Loading staff from Supabase...</p>
+            <p className="text-slate-500 font-medium text-sm">Loading staff...</p>
           </div>
         ) : staff.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
@@ -524,7 +504,7 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
             >
               <div>
                 <h3 className="text-2xl font-bold text-slate-900 dark:text-white">Enroll Staff Member</h3>
-                <p className="text-xs text-slate-500 mt-1">Staff will be created in Supabase Auth and can log in immediately.</p>
+                <p className="text-xs text-slate-500 mt-1">Staff will be created and can log in immediately.</p>
               </div>
 
               <form onSubmit={handleAddStaff} className="space-y-3">

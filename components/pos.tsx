@@ -6,9 +6,8 @@ import {
   Home, Grid, UtensilsCrossed, ShoppingCart, Clock, 
   Settings, Plus, Minus, Search, LogOut, Shield, Sun, Moon, Store, Check, CreditCard, Banknote, Smartphone, DollarSign, Building2, FileText, X
 } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
 import { vibrate, getCategoryIcon } from '@/lib/utils';
-import { placeOrderAtomic } from '@/lib/transactions';
+
 import { useNotification } from '@/hooks/use-notification';
 import { autoPrintKitchenTicket } from '@/lib/printer';
 import { formatUGX } from '@/lib/mockData';
@@ -72,7 +71,7 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
   const [myOrders, setMyOrders] = useState<any[]>([]);
 
   // Role permissions
-  const role = activeStaff?.role || (user?.email === 'admin@krown.ug' ? 'Super Admin' : 'Senior Waiter');
+  const role = activeStaff?.role || 'Senior Waiter';
   const isSuperAdmin = role === 'Super Admin';
   const isManager = role === 'Branch Manager' || isSuperAdmin;
   const isCashier = role === 'Cashier' || isManager;
@@ -398,7 +397,7 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
           <button onClick={toggleTheme} className="text-slate-400 hover:text-orange-500 transition-colors p-2">
             {isDark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
           </button>
-          <button onClick={() => { vibrate(40); supabase.auth.signOut(); }} className="text-slate-400 hover:text-red-500 transition-colors p-2">
+          <button onClick={() => { vibrate(40); localStorage.removeItem('krown_session_token'); localStorage.removeItem('krown_staff_profile'); sessionStorage.removeItem('krown_active_session'); fetch('/api/auth/logout', { method: 'POST' }).catch(() => {}); window.location.href = '/'; }} className="text-slate-400 hover:text-red-500 transition-colors p-2">
             <LogOut className="w-5 h-5" />
           </button>
           <div className="w-12 h-12 rounded-full overflow-hidden ring-2 ring-white dark:ring-white/10 shadow-md bg-slate-200 flex items-center justify-center">

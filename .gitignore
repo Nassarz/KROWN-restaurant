@@ -6,3 +6,9 @@ coverage/
 .env*
 !.env.example
 *.tsbuildinfo
+.agents/
+.kiro/
+SAAS_AUDIT.md
+TARGET_ARCHITECTURE.md
+skills-lock.json
+/tmp/
