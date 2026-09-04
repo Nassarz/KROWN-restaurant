@@ -136,8 +136,8 @@ export async function updateZone(
   values.push(zoneId);
 
   const result = await sql(
-    `UPDATE zones SET ${setClauses.join(', ')} WHERE id = $${paramIdx} RETURNING *`,
-    values
+    `UPDATE zones SET ${setClauses.join(', ')} WHERE id = $${paramIdx} AND organization_id = $${paramIdx + 1} RETURNING *`,
+    [...values, ctx.organizationId]
   ) as Zone[];
 
   return result.length > 0 ? result[0] : null;
@@ -172,7 +172,7 @@ export async function addTable(
   const rows = await sql`
     UPDATE zones
     SET tables = ${JSON.stringify(tables)}::jsonb, updated_at = NOW()
-    WHERE id = ${zoneId}
+    WHERE id = ${zoneId} AND organization_id = ${ctx.organizationId}
     RETURNING *
   ` as Zone[];
   return rows.length > 0 ? rows[0] : null;
@@ -199,7 +199,7 @@ export async function updateTable(
   const rows = await sql`
     UPDATE zones
     SET tables = ${JSON.stringify(tables)}::jsonb, updated_at = NOW()
-    WHERE id = ${zoneId}
+    WHERE id = ${zoneId} AND organization_id = ${ctx.organizationId}
     RETURNING *
   ` as Zone[];
   return rows.length > 0 ? rows[0] : null;
@@ -222,7 +222,7 @@ export async function deleteTable(
   const rows = await sql`
     UPDATE zones
     SET tables = ${JSON.stringify(filtered)}::jsonb, updated_at = NOW()
-    WHERE id = ${zoneId}
+    WHERE id = ${zoneId} AND organization_id = ${ctx.organizationId}
     RETURNING *
   ` as Zone[];
   return rows.length > 0 ? rows[0] : null;
@@ -248,7 +248,7 @@ export async function addSeat(
   const rows = await sql`
     UPDATE zones
     SET tables = ${JSON.stringify(tables)}::jsonb, updated_at = NOW()
-    WHERE id = ${zoneId}
+    WHERE id = ${zoneId} AND organization_id = ${ctx.organizationId}
     RETURNING *
   ` as Zone[];
   return rows.length > 0 ? rows[0] : null;
@@ -275,7 +275,7 @@ export async function removeSeat(
   const rows = await sql`
     UPDATE zones
     SET tables = ${JSON.stringify(tables)}::jsonb, updated_at = NOW()
-    WHERE id = ${zoneId}
+    WHERE id = ${zoneId} AND organization_id = ${ctx.organizationId}
     RETURNING *
   ` as Zone[];
   return rows.length > 0 ? rows[0] : null;
@@ -299,7 +299,7 @@ export async function updateOccupancy(
       await sql`
         UPDATE zones
         SET tables = ${JSON.stringify(tables)}::jsonb, updated_at = NOW()
-        WHERE id = ${zone.id}
+        WHERE id = ${zone.id} AND organization_id = ${ctx.organizationId}
       `;
       return;
     }

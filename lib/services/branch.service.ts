@@ -85,7 +85,7 @@ export async function createBranch(
 
   await logAudit(ctx.userId, 'branch.create', { branchId: id, name: input.name }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM branches WHERE id = ${id}`;
+  const rows = await sql`SELECT * FROM branches WHERE id = ${id} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Branch;
 }
 
@@ -119,7 +119,7 @@ export async function updateBranch(
 
   await logAudit(ctx.userId, 'branch.update', { branchId, fields }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM branches WHERE id = ${branchId}`;
+  const rows = await sql`SELECT * FROM branches WHERE id = ${branchId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Branch;
 }
 
@@ -141,7 +141,7 @@ export async function updateStatus(
 
   await logAudit(ctx.userId, 'branch.update_status', { branchId, status }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM branches WHERE id = ${branchId}`;
+  const rows = await sql`SELECT * FROM branches WHERE id = ${branchId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Branch;
 }
 

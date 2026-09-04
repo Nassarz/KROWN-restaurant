@@ -95,7 +95,7 @@ export async function createCompany(
 
   await logAudit(ctx.userId, 'company.create', { companyId: id, name: input.name }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM companies WHERE id = ${id}`;
+  const rows = await sql`SELECT * FROM companies WHERE id = ${id} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Company;
 }
 
@@ -129,7 +129,7 @@ export async function updateCompany(
 
   await logAudit(ctx.userId, 'company.update', { companyId, fields }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM companies WHERE id = ${companyId}`;
+  const rows = await sql`SELECT * FROM companies WHERE id = ${companyId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Company;
 }
 
@@ -151,7 +151,7 @@ export async function toggleStatus(
 
   await logAudit(ctx.userId, 'company.toggle_status', { companyId, status: newStatus }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM companies WHERE id = ${companyId}`;
+  const rows = await sql`SELECT * FROM companies WHERE id = ${companyId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Company;
 }
 
@@ -192,7 +192,7 @@ export async function addCompanyStaff(
 
   await logAudit(ctx.userId, 'company.add_staff', { companyId, staffId: id, name: input.name }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM company_staff WHERE id = ${id}`;
+  const rows = await sql`SELECT * FROM company_staff WHERE id = ${id} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as CompanyStaff;
 }
 
@@ -227,7 +227,7 @@ export async function updateCompanyStaff(
 
   await logAudit(ctx.userId, 'company.update_staff', { companyId, staffId, fields }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM company_staff WHERE id = ${staffId}`;
+  const rows = await sql`SELECT * FROM company_staff WHERE id = ${staffId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as CompanyStaff;
 }
 
@@ -283,7 +283,7 @@ export async function settleBalance(
 
   await logAudit(ctx.userId, 'company.settle_balance', { companyId, amount, method: paymentMethod }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM companies WHERE id = ${companyId}`;
+  const rows = await sql`SELECT * FROM companies WHERE id = ${companyId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Company;
 }
 

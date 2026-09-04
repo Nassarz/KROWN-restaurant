@@ -24,13 +24,14 @@ export async function GET(request: NextRequest) {
     if (branchId) {
       rows = await sql`
         SELECT * FROM inventory_movements
-        WHERE branch_id = ${branchId}
+        WHERE branch_id = ${branchId} AND organization_id = ${ctx.organizationId}
         ORDER BY created_at DESC
         LIMIT ${limit}
       `;
     } else {
       rows = await sql`
         SELECT * FROM inventory_movements
+        WHERE organization_id = ${ctx.organizationId}
         ORDER BY created_at DESC
         LIMIT ${limit}
       `;

@@ -228,7 +228,7 @@ export async function payOrder(
 
   await logAudit(ctx.userId, 'order.pay', { orderId, method: payment.method, amount: payment.amount }, ctx.organizationId, ctx.branchId);
 
-  const updated = await sql`SELECT * FROM orders WHERE id = ${orderId}`;
+  const updated = await sql`SELECT * FROM orders WHERE id = ${orderId} AND organization_id = ${ctx.organizationId}`;
   return updated[0] as Order;
 }
 
@@ -256,7 +256,7 @@ export async function updateStatus(
 
   await logAudit(ctx.userId, 'order.update_status', { orderId, from: order.status, to: newStatus }, ctx.organizationId, ctx.branchId);
 
-  const updated = await sql`SELECT * FROM orders WHERE id = ${orderId}`;
+  const updated = await sql`SELECT * FROM orders WHERE id = ${orderId} AND organization_id = ${ctx.organizationId}`;
   return updated[0] as Order;
 }
 
@@ -306,7 +306,7 @@ export async function splitPayment(
 
   await logAudit(ctx.userId, 'order.split_payment', { orderId, splits: splits.length, totalPaid }, ctx.organizationId, ctx.branchId);
 
-  const updated = await sql`SELECT * FROM orders WHERE id = ${orderId}`;
+  const updated = await sql`SELECT * FROM orders WHERE id = ${orderId} AND organization_id = ${ctx.organizationId}`;
   return updated[0] as Order;
 }
 
@@ -378,7 +378,7 @@ export async function addItemsToOrder(
 
   await logAudit(ctx.userId, 'order.add_items', { orderId, itemCount: items.length }, ctx.organizationId, ctx.branchId);
 
-  const updated = await sql`SELECT * FROM orders WHERE id = ${orderId}`;
+  const updated = await sql`SELECT * FROM orders WHERE id = ${orderId} AND organization_id = ${ctx.organizationId}`;
   return updated[0] as Order;
 }
 
@@ -433,7 +433,7 @@ export async function cancelOrder(
 
   await logAudit(ctx.userId, 'order.cancel', { orderId, total: order.total }, ctx.organizationId, ctx.branchId);
 
-  const updated = await sql`SELECT * FROM orders WHERE id = ${orderId}`;
+  const updated = await sql`SELECT * FROM orders WHERE id = ${orderId} AND organization_id = ${ctx.organizationId}`;
   return updated[0] as Order;
 }
 
@@ -507,6 +507,6 @@ export async function updateOrderTin(
 
   await logAudit(ctx.userId, 'order.update_tin', { orderId, tin }, ctx.organizationId, ctx.branchId);
 
-  const updated = await sql`SELECT * FROM orders WHERE id = ${orderId}`;
+  const updated = await sql`SELECT * FROM orders WHERE id = ${orderId} AND organization_id = ${ctx.organizationId}`;
   return updated[0] as Order;
 }

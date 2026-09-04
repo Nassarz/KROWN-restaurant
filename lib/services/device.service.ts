@@ -127,7 +127,7 @@ export async function registerDevice(
 
   await logAudit(ctx.userId, 'device.register', { deviceId: id, deviceName: input.deviceName, deviceType: input.deviceType }, ctx.organizationId, ctx.branchId);
 
-  const rows = await queryWithRetry(() => sql`SELECT * FROM devices WHERE id = ${id}`);
+  const rows = await queryWithRetry(() => sql`SELECT * FROM devices WHERE id = ${id} AND organization_id = ${ctx.organizationId}`);
   return rows[0] as Device;
 }
 
@@ -150,7 +150,7 @@ export async function activateDevice(
 
   await logAudit(ctx.userId, 'device.activate', { deviceId }, ctx.organizationId, ctx.branchId);
 
-  const rows = await queryWithRetry(() => sql`SELECT * FROM devices WHERE id = ${deviceId}`);
+  const rows = await queryWithRetry(() => sql`SELECT * FROM devices WHERE id = ${deviceId} AND organization_id = ${ctx.organizationId}`);
   return rows[0] as Device;
 }
 
@@ -173,7 +173,7 @@ export async function suspendDevice(
 
   await logAudit(ctx.userId, 'device.suspend', { deviceId }, ctx.organizationId, ctx.branchId);
 
-  const rows = await queryWithRetry(() => sql`SELECT * FROM devices WHERE id = ${deviceId}`);
+  const rows = await queryWithRetry(() => sql`SELECT * FROM devices WHERE id = ${deviceId} AND organization_id = ${ctx.organizationId}`);
   return rows[0] as Device;
 }
 
@@ -197,7 +197,7 @@ export async function revokeDevice(
 
   await logAudit(ctx.userId, 'device.revoke', { deviceId, reason }, ctx.organizationId, ctx.branchId);
 
-  const rows = await queryWithRetry(() => sql`SELECT * FROM devices WHERE id = ${deviceId}`);
+  const rows = await queryWithRetry(() => sql`SELECT * FROM devices WHERE id = ${deviceId} AND organization_id = ${ctx.organizationId}`);
   return rows[0] as Device;
 }
 
@@ -235,7 +235,7 @@ export async function updateDevice(
 
   await logAudit(ctx.userId, 'device.update', { deviceId, fields }, ctx.organizationId, ctx.branchId);
 
-  const rows = await queryWithRetry(() => sql`SELECT * FROM devices WHERE id = ${deviceId}`);
+  const rows = await queryWithRetry(() => sql`SELECT * FROM devices WHERE id = ${deviceId} AND organization_id = ${ctx.organizationId}`);
   return rows[0] as Device;
 }
 
@@ -257,7 +257,7 @@ export async function heartbeatDevice(
     WHERE id = ${deviceId} AND organization_id = ${ctx.organizationId}
   `);
 
-  const rows = await queryWithRetry(() => sql`SELECT * FROM devices WHERE id = ${deviceId}`);
+  const rows = await queryWithRetry(() => sql`SELECT * FROM devices WHERE id = ${deviceId} AND organization_id = ${ctx.organizationId}`);
   return rows[0] as Device;
 }
 
@@ -301,7 +301,7 @@ export async function enrollDevice(
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
   const rows = await queryWithRetry(() =>
-    sql`SELECT * FROM devices WHERE enrollment_token_hash = ${tokenHash} AND status = 'pending' LIMIT 1`
+    sql`SELECT * FROM devices WHERE enrollment_token_hash = ${tokenHash} AND status = 'pending' AND organization_id = ${ctx.organizationId} LIMIT 1`
   );
 
   if (rows.length === 0) throw new Error('Invalid or expired enrollment token');
@@ -325,7 +325,7 @@ export async function enrollDevice(
 
   await logAudit(ctx.userId, 'device.enroll', { deviceId: device.id, deviceFingerprint }, ctx.organizationId, ctx.branchId);
 
-  const updated = await queryWithRetry(() => sql`SELECT * FROM devices WHERE id = ${device.id}`);
+  const updated = await queryWithRetry(() => sql`SELECT * FROM devices WHERE id = ${device.id} AND organization_id = ${ctx.organizationId}`);
   return updated[0] as Device;
 }
 

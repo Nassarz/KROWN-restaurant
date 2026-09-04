@@ -46,7 +46,7 @@ export async function createSession(
     VALUES (${id}, ${ctx.organizationId}, ${staffId}, ${deviceId || null}, ${tokenHash}, ${ctx.role}, ${JSON.stringify([])}, 'active', ${ipAddress || null}, ${userAgent || null}, NOW(), ${expiresAt}, NOW())
   `);
 
-  const rows = await queryWithRetry(() => sql`SELECT * FROM staff_sessions WHERE id = ${id}`);
+  const rows = await queryWithRetry(() => sql`SELECT * FROM staff_sessions WHERE id = ${id} AND organization_id = ${ctx.organizationId}`);
   return { session: rows[0] as StaffSession, rawToken };
 }
 
@@ -105,7 +105,7 @@ export async function refreshSession(
     WHERE id = ${sessionId} AND organization_id = ${ctx.organizationId}
   `);
 
-  const rows = await queryWithRetry(() => sql`SELECT * FROM staff_sessions WHERE id = ${sessionId}`);
+  const rows = await queryWithRetry(() => sql`SELECT * FROM staff_sessions WHERE id = ${sessionId} AND organization_id = ${ctx.organizationId}`);
   return rows[0] as StaffSession;
 }
 
@@ -127,7 +127,7 @@ export async function revokeSession(
     WHERE id = ${sessionId} AND organization_id = ${ctx.organizationId}
   `);
 
-  const rows = await queryWithRetry(() => sql`SELECT * FROM staff_sessions WHERE id = ${sessionId}`);
+  const rows = await queryWithRetry(() => sql`SELECT * FROM staff_sessions WHERE id = ${sessionId} AND organization_id = ${ctx.organizationId}`);
   return rows[0] as StaffSession;
 }
 
@@ -177,13 +177,21 @@ export async function getSessionsByDevice(
   return rows as StaffSession[];
 }
 
-export async function cleanupExpiredSessions(): Promise<number> {
+export async function cleanupExpiredSessions(orgId?: string): Promise<number> {
   const sql = getSql();
 
-  const result = await queryWithRetry(() => sql`
-    UPDATE staff_sessions SET status = 'expired'
-    WHERE status = 'active' AND expires_at < NOW()
-  `);
+  let result;
+  if (orgId) {
+    result = await queryWithRetry(() => sql`
+      UPDATE staff_sessions SET status = 'expired'
+      WHERE status = 'active' AND expires_at < NOW() AND organization_id = ${orgId}
+    `);
+  } else {
+    result = await queryWithRetry(() => sql`
+      UPDATE staff_sessions SET status = 'expired'
+      WHERE status = 'active' AND expires_at < NOW()
+    `);
+  }
 
   return (result as any).rowCount || 0;
 }

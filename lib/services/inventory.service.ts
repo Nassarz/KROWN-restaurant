@@ -214,7 +214,7 @@ export async function restoreInventory(
       await sql`
         UPDATE ingredients
         SET quantity = ${qtyAfter}, updated_at = NOW()
-        WHERE id = ${ingredient.id}
+        WHERE id = ${ingredient.id} AND organization_id = ${ctx.organizationId}
       `;
 
       const movement = await recordMovement(sql, ctx.organizationId, {
@@ -245,7 +245,7 @@ async function getIngredient(
 ): Promise<Ingredient | null> {
   const rows = await sql`
     SELECT * FROM ingredients
-    WHERE id = ${ingredientId}
+    WHERE id = ${ingredientId} AND organization_id = ${organizationId}
     LIMIT 1
   ` as Ingredient[];
   return rows.length > 0 ? rows[0] : null;

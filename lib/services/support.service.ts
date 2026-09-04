@@ -128,7 +128,7 @@ export async function createConversation(
 
   await logAudit(ctx.userId, 'support.conversation_create', { conversationId: id, subject: input.subject }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM support_conversations WHERE id = ${id}`;
+  const rows = await sql`SELECT * FROM support_conversations WHERE id = ${id} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as SupportConversation;
 }
 
@@ -207,7 +207,7 @@ export async function assignAgent(
 
   await logAudit(ctx.userId, 'support.conversation_assign', { conversationId, agentId }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM support_conversations WHERE id = ${conversationId}`;
+  const rows = await sql`SELECT * FROM support_conversations WHERE id = ${conversationId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as SupportConversation;
 }
 
@@ -228,7 +228,7 @@ export async function updateStatus(
 
   await logAudit(ctx.userId, 'support.conversation_status', { conversationId, status }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM support_conversations WHERE id = ${conversationId}`;
+  const rows = await sql`SELECT * FROM support_conversations WHERE id = ${conversationId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as SupportConversation;
 }
 
@@ -249,7 +249,7 @@ export async function resolveConversation(
 
   await logAudit(ctx.userId, 'support.conversation_resolve', { conversationId }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM support_conversations WHERE id = ${conversationId}`;
+  const rows = await sql`SELECT * FROM support_conversations WHERE id = ${conversationId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as SupportConversation;
 }
 
@@ -270,7 +270,7 @@ export async function closeConversation(
 
   await logAudit(ctx.userId, 'support.conversation_close', { conversationId }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM support_conversations WHERE id = ${conversationId}`;
+  const rows = await sql`SELECT * FROM support_conversations WHERE id = ${conversationId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as SupportConversation;
 }
 
@@ -291,7 +291,7 @@ export async function reopenConversation(
 
   await logAudit(ctx.userId, 'support.conversation_reopen', { conversationId }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM support_conversations WHERE id = ${conversationId}`;
+  const rows = await sql`SELECT * FROM support_conversations WHERE id = ${conversationId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as SupportConversation;
 }
 
@@ -325,13 +325,13 @@ export async function sendMessage(
       UPDATE support_conversations
       SET last_agent_message_at = NOW(), updated_at = NOW(),
           first_response_at = COALESCE(first_response_at, NOW())
-      WHERE id = ${conversationId}
+      WHERE id = ${conversationId} AND organization_id = ${ctx.organizationId}
     `;
   } else {
     await sql`
       UPDATE support_conversations
       SET last_customer_message_at = NOW(), updated_at = NOW(), status = 'waiting_for_support'
-      WHERE id = ${conversationId} AND status IN ('open', 'waiting_for_customer')
+      WHERE id = ${conversationId} AND organization_id = ${ctx.organizationId} AND status IN ('open', 'waiting_for_customer')
     `;
   }
 

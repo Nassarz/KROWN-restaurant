@@ -150,7 +150,7 @@ export async function createAlert(
     await logAudit(ctx.userId, 'security.alert_create', { alertId: id, type: input.alert_type, severity: input.severity }, ctx.organizationId, ctx.branchId);
   }
 
-  const rows = await sql`SELECT * FROM security_alerts WHERE id = ${id}`;
+  const rows = await sql`SELECT * FROM security_alerts WHERE id = ${id} AND organization_id = ${orgId}`;
   return rows[0] as SecurityAlert;
 }
 
@@ -205,7 +205,7 @@ export async function resolveAlert(
 
   await logAudit(ctx.userId, 'security.alert_resolve', { alertId }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM security_alerts WHERE id = ${alertId}`;
+  const rows = await sql`SELECT * FROM security_alerts WHERE id = ${alertId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as SecurityAlert;
 }
 
@@ -222,7 +222,7 @@ export async function dismissAlert(ctx: TenantContext, alertId: string): Promise
 
   await logAudit(ctx.userId, 'security.alert_dismiss', { alertId }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM security_alerts WHERE id = ${alertId}`;
+  const rows = await sql`SELECT * FROM security_alerts WHERE id = ${alertId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as SecurityAlert;
 }
 
@@ -283,23 +283,23 @@ export async function generateVerificationCode(
 export async function verifyCode(
   staffId: string,
   code: string,
-  purpose: VerificationCode['purpose']
+  purpose: VerificationCode['purpose'],
+  orgId?: string
 ): Promise<{ success: boolean; error?: string }> {
   const sql = getSql();
   const codeHash = sha256Hash(code);
 
-  const rows = await sql`
-    SELECT * FROM verification_codes
-    WHERE staff_id = ${staffId} AND purpose = ${purpose} AND code_hash = ${codeHash}
-    ORDER BY created_at DESC LIMIT 1
-  `;
+  const rows = orgId
+    ? await sql`SELECT * FROM verification_codes WHERE staff_id = ${staffId} AND purpose = ${purpose} AND code_hash = ${codeHash} AND organization_id = ${orgId} ORDER BY created_at DESC LIMIT 1`
+    : await sql`SELECT * FROM verification_codes WHERE staff_id = ${staffId} AND purpose = ${purpose} AND code_hash = ${codeHash} ORDER BY created_at DESC LIMIT 1`;
 
   if (rows.length === 0) {
     // Increment attempts on any matching unused code
-    await sql`
-      UPDATE verification_codes SET attempts = attempts + 1
-      WHERE staff_id = ${staffId} AND purpose = ${purpose} AND used = FALSE AND attempts < max_attempts
-    `;
+    if (orgId) {
+      await sql`UPDATE verification_codes SET attempts = attempts + 1 WHERE staff_id = ${staffId} AND purpose = ${purpose} AND used = FALSE AND attempts < max_attempts AND organization_id = ${orgId}`;
+    } else {
+      await sql`UPDATE verification_codes SET attempts = attempts + 1 WHERE staff_id = ${staffId} AND purpose = ${purpose} AND used = FALSE AND attempts < max_attempts`;
+    }
     return { success: false, error: 'Invalid code' };
   }
 
@@ -317,9 +317,7 @@ export async function verifyCode(
     return { success: false, error: 'Too many attempts' };
   }
 
-  await sql`
-    UPDATE verification_codes SET used = TRUE, used_at = NOW() WHERE id = ${record.id}
-  `;
+  await sql`UPDATE verification_codes SET used = TRUE, used_at = NOW() WHERE id = ${record.id}`;
 
   return { success: true };
 }
@@ -352,14 +350,15 @@ export async function createPasswordResetToken(
 }
 
 export async function verifyPasswordResetToken(
-  token: string
+  token: string,
+  orgId?: string
 ): Promise<{ valid: boolean; staff_id?: string; organization_id?: string; error?: string }> {
   const sql = getSql();
   const tokenHash = sha256Hash(token);
 
-  const rows = await sql`
-    SELECT * FROM password_reset_tokens WHERE token_hash = ${tokenHash} ORDER BY created_at DESC LIMIT 1
-  `;
+  const rows = orgId
+    ? await sql`SELECT * FROM password_reset_tokens WHERE token_hash = ${tokenHash} AND organization_id = ${orgId} ORDER BY created_at DESC LIMIT 1`
+    : await sql`SELECT * FROM password_reset_tokens WHERE token_hash = ${tokenHash} ORDER BY created_at DESC LIMIT 1`;
 
   if (rows.length === 0) {
     return { valid: false, error: 'Invalid token' };
@@ -382,7 +381,7 @@ export async function verifyPasswordResetToken(
 
 // ── MFA / TOTP ─────────────────────────────────────────────────────────────
 
-export async function createMFASecret(staffId: string): Promise<{ secret: string; id: string }> {
+export async function createMFASecret(staffId: string, orgId?: string): Promise<{ secret: string; id: string }> {
   const sql = getSql();
   const secret = crypto.randomBytes(20).toString('base64');
   const id = generateId();
@@ -395,7 +394,7 @@ export async function createMFASecret(staffId: string): Promise<{ secret: string
   return { secret, id };
 }
 
-export async function enableMFA(staffId: string, totpCode: string): Promise<boolean> {
+export async function enableMFA(staffId: string, totpCode: string, orgId?: string): Promise<boolean> {
   const sql = getSql();
 
   const rows = await sql`SELECT * FROM mfa_secrets WHERE staff_id = ${staffId}`;
@@ -422,7 +421,7 @@ export async function enableMFA(staffId: string, totpCode: string): Promise<bool
   return true;
 }
 
-export async function verifyMFACode(staffId: string, code: string): Promise<boolean> {
+export async function verifyMFACode(staffId: string, code: string, orgId?: string): Promise<boolean> {
   const sql = getSql();
 
   const rows = await sql`SELECT * FROM mfa_secrets WHERE staff_id = ${staffId} AND enabled = TRUE`;
@@ -433,13 +432,13 @@ export async function verifyMFACode(staffId: string, code: string): Promise<bool
   return code === expected;
 }
 
-export async function disableMFA(staffId: string): Promise<void> {
+export async function disableMFA(staffId: string, orgId?: string): Promise<void> {
   const sql = getSql();
   await sql`DELETE FROM mfa_secrets WHERE staff_id = ${staffId}`;
   await sql`UPDATE staff SET mfa_enabled = FALSE WHERE id = ${staffId}`;
 }
 
-export async function getMFAStatus(staffId: string): Promise<{ enabled: boolean; created_at?: string }> {
+export async function getMFAStatus(staffId: string, orgId?: string): Promise<{ enabled: boolean; created_at?: string }> {
   const sql = getSql();
   const rows = await sql`SELECT enabled, created_at FROM mfa_secrets WHERE staff_id = ${staffId}`;
   if (rows.length === 0) return { enabled: false };
@@ -473,7 +472,7 @@ export async function createTrustedDevice(
 
   await logAudit(ctx.userId, 'security.device_trusted', { staffId, fingerprint, name }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM trusted_devices WHERE staff_id = ${staffId} AND device_fingerprint = ${fingerprint}`;
+  const rows = await sql`SELECT * FROM trusted_devices WHERE staff_id = ${staffId} AND device_fingerprint = ${fingerprint} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as TrustedDevice;
 }
 
@@ -489,9 +488,7 @@ export async function listTrustedDevices(ctx: TenantContext, staffId: string): P
 
 export async function isTrustedDevice(staffId: string, fingerprint: string): Promise<boolean> {
   const sql = getSql();
-  const rows = await sql`
-    SELECT id FROM trusted_devices WHERE staff_id = ${staffId} AND device_fingerprint = ${fingerprint} AND status = 'active'
-  `;
+  const rows = await sql`SELECT id FROM trusted_devices WHERE staff_id = ${staffId} AND device_fingerprint = ${fingerprint} AND status = 'active'`;
   return rows.length > 0;
 }
 

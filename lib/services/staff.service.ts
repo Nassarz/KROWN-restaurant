@@ -109,7 +109,7 @@ export async function createStaff(
 
   await logAudit(ctx.userId, 'staff.create', { staffId: id, name: input.name, role: input.role }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM staff WHERE id = ${id}`;
+  const rows = await sql`SELECT * FROM staff WHERE id = ${id} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Staff;
 }
 
@@ -145,7 +145,7 @@ export async function updateStaff(
 
   await logAudit(ctx.userId, 'staff.update', { staffId, fields }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM staff WHERE id = ${staffId}`;
+  const rows = await sql`SELECT * FROM staff WHERE id = ${staffId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Staff;
 }
 
@@ -190,7 +190,7 @@ export async function updateRole(
 
   await logAudit(ctx.userId, 'staff.update_role', { staffId, from: staff.role, to: newRole }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM staff WHERE id = ${staffId}`;
+  const rows = await sql`SELECT * FROM staff WHERE id = ${staffId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Staff;
 }
 
@@ -212,7 +212,7 @@ export async function updateStatus(
 
   await logAudit(ctx.userId, 'staff.update_status', { staffId, status }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM staff WHERE id = ${staffId}`;
+  const rows = await sql`SELECT * FROM staff WHERE id = ${staffId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Staff;
 }
 

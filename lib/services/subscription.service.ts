@@ -153,12 +153,13 @@ export async function getUsage(ctx: TenantContext): Promise<UsageCounts> {
   await setTenantContext(sql, ctx.organizationId);
 
   const [branches, staff, menuItems, ordersToday] = await Promise.all([
-    sql`SELECT COUNT(*)::int as count FROM branches`,
-    sql`SELECT COUNT(*)::int as count FROM staff`,
-    sql`SELECT COUNT(*)::int as count FROM products`,
+    sql`SELECT COUNT(*)::int as count FROM branches WHERE organization_id = ${ctx.organizationId}`,
+    sql`SELECT COUNT(*)::int as count FROM staff WHERE organization_id = ${ctx.organizationId} AND role != 'super_admin'`,
+    sql`SELECT COUNT(*)::int as count FROM products WHERE organization_id = ${ctx.organizationId}`,
     sql`
       SELECT COUNT(*)::int as count FROM orders
-      WHERE created_at >= CURRENT_DATE
+      WHERE organization_id = ${ctx.organizationId}
+        AND created_at >= CURRENT_DATE
         AND created_at < CURRENT_DATE + INTERVAL '1 day'
     `,
   ]) as { count: number }[][];

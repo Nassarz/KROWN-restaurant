@@ -99,7 +99,7 @@ export async function createProduct(
 
   await logAudit(ctx.userId, 'product.create', { productId: id, name: input.name }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM products WHERE id = ${id}`;
+  const rows = await sql`SELECT * FROM products WHERE id = ${id} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Product;
 }
 
@@ -133,7 +133,7 @@ export async function updateProduct(
 
   await logAudit(ctx.userId, 'product.update', { productId, fields }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM products WHERE id = ${productId}`;
+  const rows = await sql`SELECT * FROM products WHERE id = ${productId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Product;
 }
 
@@ -173,7 +173,7 @@ export async function toggleAvailability(
 
   await logAudit(ctx.userId, 'product.toggle_availability', { productId, available: newAvailability }, ctx.organizationId, ctx.branchId);
 
-  const updated = await sql`SELECT * FROM products WHERE id = ${productId}`;
+  const updated = await sql`SELECT * FROM products WHERE id = ${productId} AND organization_id = ${ctx.organizationId}`;
   return updated[0] as Product;
 }
 

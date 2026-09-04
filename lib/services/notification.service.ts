@@ -51,7 +51,9 @@ export async function createNotification(
     VALUES (${id}, ${orgId}, ${input.recipient_id}, ${input.type}, ${input.title}, ${input.message || null}, ${input.link_url || null}, ${input.link_type || null}, ${input.priority || 'normal'}, ${JSON.stringify(input.metadata || {})})
   `;
 
-  const rows = await sql`SELECT * FROM notifications WHERE id = ${id}`;
+  const rows = ctx
+    ? await sql`SELECT * FROM notifications WHERE id = ${id} AND organization_id = ${ctx.organizationId}`
+    : await sql`SELECT * FROM notifications WHERE id = ${id}`;
   return rows[0] as Notification;
 }
 
@@ -87,7 +89,7 @@ export async function markAsRead(ctx: TenantContext, notificationId: string): Pr
 
   await sql`UPDATE notifications SET read = TRUE, read_at = NOW() WHERE id = ${notificationId} AND organization_id = ${ctx.organizationId}`;
 
-  const rows = await sql`SELECT * FROM notifications WHERE id = ${notificationId}`;
+  const rows = await sql`SELECT * FROM notifications WHERE id = ${notificationId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Notification;
 }
 

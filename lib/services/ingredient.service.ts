@@ -101,7 +101,7 @@ export async function createIngredient(
 
   await logAudit(ctx.userId, 'ingredient.create', { ingredientId: id, name: input.name }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM ingredients WHERE id = ${id}`;
+  const rows = await sql`SELECT * FROM ingredients WHERE id = ${id} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Ingredient;
 }
 
@@ -135,7 +135,7 @@ export async function updateIngredient(
 
   await logAudit(ctx.userId, 'ingredient.update', { ingredientId, fields }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM ingredients WHERE id = ${ingredientId}`;
+  const rows = await sql`SELECT * FROM ingredients WHERE id = ${ingredientId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Ingredient;
 }
 
@@ -189,7 +189,7 @@ export async function updateQuantity(
 
   await logAudit(ctx.userId, 'ingredient.update_quantity', { ingredientId, old: ingredient.quantity, new: newQuantity }, ctx.organizationId, ctx.branchId);
 
-  const rows = await sql`SELECT * FROM ingredients WHERE id = ${ingredientId}`;
+  const rows = await sql`SELECT * FROM ingredients WHERE id = ${ingredientId} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Ingredient;
 }
 
