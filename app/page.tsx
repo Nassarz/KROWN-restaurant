@@ -39,8 +39,15 @@ function normalizeRole(role: string | null | undefined): StaffMember['role'] {
     head_chef: 'Head Chef',
     chef: 'Head Chef',
     kitchen_staff: 'Kitchen Staff',
+    'Super Admin': 'Super Admin',
+    'Restaurant Admin': 'Restaurant Admin',
+    'Branch Manager': 'Branch Manager',
+    'Cashier': 'Cashier',
+    'Senior Waiter': 'Senior Waiter',
+    'Head Chef': 'Head Chef',
+    'Kitchen Staff': 'Kitchen Staff',
   };
-  return map[role.toLowerCase()] || 'Cashier';
+  return map[role] ?? map[role.toLowerCase()] ?? 'Cashier';
 }
 
 function readCachedStaff(): { user: any; staff: StaffMember; view: 'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | 'super_admin' } | null {

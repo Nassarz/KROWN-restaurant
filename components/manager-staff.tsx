@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Users as UsersIcon, Plus, Mail, Building2, Phone, CreditCard,
   ShieldAlert, Trash2, Ban, PauseCircle, PlayCircle, Image as ImageIcon,
-  RefreshCw, CheckCircle2, AlertCircle, Loader2, Key, ShieldCheck
+  RefreshCw, CheckCircle2, AlertCircle, Loader2, Key
 } from 'lucide-react';
 import { dataStore } from '@/lib/dataStore';
 import { StaffMember, Branch } from '@/lib/mockData';
@@ -222,9 +222,6 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
       } else if (action === 'update_role' && extra?.role) {
         dataStore.updateStaffRole(staffMember.id, extra.role);
         setStaff(prev => prev.map(s => s.id === staffMember.id ? { ...s, role: extra.role } : s));
-      } else if (action === 'promote_admin') {
-        dataStore.updateStaffRole(staffMember.id, 'Super Admin');
-        setStaff(prev => prev.map(s => s.id === staffMember.id ? { ...s, role: 'Super Admin', branch: 'Global HQ' } : s));
       }
 
       const token = typeof window !== 'undefined' ? localStorage.getItem('krown_session_token') : null;
@@ -396,7 +393,6 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
                       <option value="Head Chef">Head Chef (Kitchen)</option>
                       <option value="Kitchen Staff">Kitchen Staff (Kitchen)</option>
                       <option value="Branch Manager">Branch Manager (Manager)</option>
-                      <option value="Super Admin">Super Admin (Admin HQ)</option>
                     </select>
                     <span className={`text-[11px] font-extrabold uppercase px-2.5 py-0.5 rounded-full ${
                       u.status === 'banned' ? 'bg-red-500/20 text-red-500' :
@@ -410,20 +406,6 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
 
                 {/* Action Controls */}
                 <div className="mt-4 pt-3 border-t border-black/5 dark:border-white/5 flex items-center justify-end gap-2 flex-wrap">
-                  {u.role !== 'Super Admin' && (
-                    <button
-                      onClick={() => {
-                        if (confirm(`Promote "${u.name}" to Super Admin? This gives global access.`)) {
-                          handleAction('promote_admin', u);
-                        }
-                      }}
-                      className="px-3 py-1.5 text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20 rounded-xl flex items-center gap-1.5 transition-colors"
-                      title="Promote to Super Admin"
-                    >
-                      <ShieldCheck className="w-3.5 h-3.5" /> Make Admin
-                    </button>
-                  )}
-
                   <button
                     onClick={async () => {
                       const newPass = prompt(`New password for ${u.name} (min 6 chars):`, '');
@@ -578,7 +560,6 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
                       <option value="Head Chef">Head Chef → Kitchen</option>
                       <option value="Kitchen Staff">Kitchen Staff → Kitchen</option>
                       <option value="Branch Manager">Branch Manager → Manager</option>
-                      <option value="Super Admin">Super Admin → Admin HQ</option>
                     </select>
                   </div>
                   <div>
