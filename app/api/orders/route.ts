@@ -32,9 +32,22 @@ export async function POST(request: NextRequest) {
     const branchId = body.branchId || body.branch_id || ctx.branchId;
     if (!branchId) return NextResponse.json({ error: 'Branch is required' }, { status: 400 });
     await assertBranchAccess(ctx, branchId);
-    const items = (body.items || []).map((item: any) => ({ productId: item.productId || item.product_id, quantity: item.quantity || 1, notes: item.notes, addOns: item.addOns || item.add_ons }));
+    const items = (body.items || []).map((item: any) => ({ productId: item.productId || item.product_id, quantity: Number(item.quantity || 1), notes: item.notes, addOns: item.addOns || item.add_ons }));
     if (!items.length) return NextResponse.json({ error: 'At least one order item is required' }, { status: 400 });
-    const order = await createOrder(ctx, { branchId, tableNumber: body.table || body.table_number || '1', seat: body.seat, items, staffId: body.staffId || body.staff_id, companyName: body.companyName || body.company_name, tin: body.tin, companyId: body.companyId || body.company_id });
+    if (items.some((item: any) => !item.productId || !Number.isFinite(item.quantity) || item.quantity <= 0)) return NextResponse.json({ error: 'Invalid order item' }, { status: 400 });
+
+    // Never accept staffId/userId from the browser as the actor. The order is
+    // attributed to the authenticated session identity.
+    const order = await createOrder(ctx, {
+      branchId,
+      tableNumber: body.table || body.table_number || '1',
+      seat: body.seat,
+      items,
+      staffId: ctx.userId,
+      companyName: body.companyName || body.company_name,
+      tin: body.tin,
+      companyId: body.companyId || body.company_id,
+    });
     return NextResponse.json({ data: order }, { status: 201 });
   } catch (error: any) {
     const status = String(error?.message || '').startsWith('Forbidden') ? 403 : 500;
