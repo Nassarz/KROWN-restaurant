@@ -201,32 +201,25 @@ export async function saveRecipe(
 
   const now = Date.now();
 
-  await sql`BEGIN`;
-  try {
-    await sql`DELETE FROM product_ingredients WHERE product_id = ${productId} AND organization_id = ${ctx.organizationId}`;
+  await sql`DELETE FROM product_ingredients WHERE product_id = ${productId} AND organization_id = ${ctx.organizationId}`;
 
-    const saved: ProductIngredient[] = [];
-    for (const ing of ingredients) {
-      const id = generateId();
-      await sql`
-        INSERT INTO product_ingredients (id, product_id, ingredient_id, quantity_per_unit, organization_id, branch_id, created_at)
-        VALUES (${id}, ${productId}, ${ing.ingredientId}, ${ing.quantityPerUnit}, ${ctx.organizationId}, ${ctx.branchId}, NOW())
-      `;
-      saved.push({
-        id,
-        product_id: productId,
-        ingredient_id: ing.ingredientId,
-        quantity_per_unit: ing.quantityPerUnit,
-        organization_id: ctx.organizationId,
-        created_at: now,
-      });
-    }
-
-    await sql`COMMIT`;
-    await logAudit(ctx.userId, 'product.save_recipe', { productId, ingredientCount: ingredients.length }, ctx.organizationId, ctx.branchId);
-    return saved;
-  } catch (e) {
-    await sql`ROLLBACK`;
-    throw e;
+  const saved: ProductIngredient[] = [];
+  for (const ing of ingredients) {
+    const id = generateId();
+    await sql`
+      INSERT INTO product_ingredients (id, product_id, ingredient_id, quantity_per_unit, organization_id, branch_id, created_at)
+      VALUES (${id}, ${productId}, ${ing.ingredientId}, ${ing.quantityPerUnit}, ${ctx.organizationId}, ${ctx.branchId}, NOW())
+    `;
+    saved.push({
+      id,
+      product_id: productId,
+      ingredient_id: ing.ingredientId,
+      quantity_per_unit: ing.quantityPerUnit,
+      organization_id: ctx.organizationId,
+      created_at: now,
+    });
   }
+
+  await logAudit(ctx.userId, 'product.save_recipe', { productId, ingredientCount: ingredients.length }, ctx.organizationId, ctx.branchId);
+  return saved;
 }

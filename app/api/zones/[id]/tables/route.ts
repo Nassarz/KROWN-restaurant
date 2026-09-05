@@ -3,6 +3,27 @@ import * as zoneService from '@/lib/services/zone.service';
 import { extractTenantContext } from '@/lib/tenant';
 import { hasPermission } from '@/lib/rbac';
 
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const ctx = extractTenantContext(request);
+  if (!ctx) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  try {
+    const { id } = await params;
+    const zone = await zoneService.getZone(ctx, id);
+    if (!zone) {
+      return NextResponse.json({ error: 'Zone not found' }, { status: 404 });
+    }
+    return NextResponse.json({ data: zone.tables || [] });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message || 'Failed to get tables' }, { status: 500 });
+  }
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }

@@ -35,20 +35,20 @@ export async function GET(request: NextRequest) {
         SELECT d.id, d.device_name, d.device_type, d.status, o.name as org_name
         FROM devices d
         LEFT JOIN organizations o ON o.id = d.organization_id
-        WHERE d.device_name ILIKE ${searchPattern} OR d.device_token ILIKE ${searchPattern}
+        WHERE d.device_name ILIKE ${searchPattern} OR d.device_fingerprint ILIKE ${searchPattern}
         LIMIT 5
       `,
       sql`
-        SELECT o.id, o.order_number, o.total, o.payment_status, org.name as org_name, o.created_at
+        SELECT o.id, o.id::text as order_ref, o.total, o.payment_status, org.name as org_name, o.created_at
         FROM orders o
         LEFT JOIN organizations org ON org.id = o.organization_id
-        WHERE o.order_number ILIKE ${searchPattern} OR o.id::text ILIKE ${searchPattern}
+        WHERE o.id::text ILIKE ${searchPattern}
         LIMIT 5
       `,
       sql`
         SELECT sa.id, sa.title, sa.severity, sa.status, sa.created_at
         FROM security_alerts sa
-        WHERE sa.title ILIKE ${searchPattern} OR sa.details::text ILIKE ${searchPattern}
+        WHERE sa.title ILIKE ${searchPattern} OR sa.metadata::text ILIKE ${searchPattern}
         LIMIT 5
       `,
       sql`

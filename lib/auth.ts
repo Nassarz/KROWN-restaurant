@@ -3,7 +3,7 @@
 
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
 import argon2 from 'argon2';
-import { getSql } from './neon-server';
+import { getSql, queryWithRetry } from './neon-server';
 
 const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET || 'krown-dev-secret-change-in-production');
 const JWT_EXPIRY_HOURS = parseInt(process.env.JWT_EXPIRY_HOURS || '24');
@@ -75,7 +75,6 @@ export interface AuthResult {
 }
 
 export async function authenticateStaff(email: string, password: string): Promise<AuthResult> {
-  const { getSql, queryWithRetry } = await import('./neon-server');
   const sql = getSql();
 
   const staffRows = await queryWithRetry(() => sql`

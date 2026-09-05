@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
         (${searchPattern}::text IS NULL OR s.name ILIKE ${searchPattern} OR s.email ILIKE ${searchPattern} OR s.phone ILIKE ${searchPattern})
         AND (${role} = 'all' OR s.role = ${role})
         AND (${status} = 'all' OR s.status = ${status})
-        AND (${orgId} = 'all' OR s.organization_id = ${orgId})
+        AND (${orgId}::text = 'all' OR s.organization_id::text = ${orgId})
       ORDER BY s.created_at DESC
       LIMIT ${limit} OFFSET ${offset}
     `;
@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
         (${searchPattern}::text IS NULL OR s.name ILIKE ${searchPattern} OR s.email ILIKE ${searchPattern} OR s.phone ILIKE ${searchPattern})
         AND (${role} = 'all' OR s.role = ${role})
         AND (${status} = 'all' OR s.status = ${status})
-        AND (${orgId} = 'all' OR s.organization_id = ${orgId})
+        AND (${orgId}::text = 'all' OR s.organization_id::text = ${orgId})
     `;
 
     return NextResponse.json({
