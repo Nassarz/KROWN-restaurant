@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import POSPage from '@/components/pos';
 import AdminPage from '@/components/admin';
 import ManagerPage from '@/components/manager';
@@ -51,61 +51,43 @@ function normalizeRole(role: string | null | undefined): StaffMember['role'] {
 }
 
 export default function AppRouter() {
-  // Restore session from localStorage on page load (survives browser close)
-  const [activeStaff, setActiveStaff] = useState<StaffMember | null>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const cached = localStorage.getItem('krown_staff_profile');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (parsed?.id && parsed?.email && parsed?.role) {
-            sessionStorage.setItem('krown_active_session', 'true');
-            return parsed;
-          }
+  // SSR-safe initial states — localStorage is unavailable during SSR, so we
+  // always start with the logged-out defaults. A useEffect below hydrates
+  // these from localStorage after mount, which is the first client paint.
+  const [activeStaff, setActiveStaff] = useState<StaffMember | null>(null);
+  const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | 'super_admin'>('pos');
+
+  const didLoginRef = useRef(false);
+
+  // Hydrate from localStorage after first client render (avoids SSR mismatch)
+  useEffect(() => {
+    try {
+      const cached = localStorage.getItem('krown_staff_profile');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed?.id && parsed?.email && parsed?.role) {
+          sessionStorage.setItem('krown_active_session', 'true');
+          setActiveStaff(parsed);
+          setUser({
+            uid: parsed.id,
+            displayName: parsed.name,
+            email: parsed.email,
+            photoURL: parsed.avatar,
+            assignedBranchId: parsed.assignedBranchId || null,
+          });
+          if (parsed.role === 'Super Admin') setView('super_admin');
+          else if (parsed.role === 'Restaurant Admin') setView('admin');
+          else if (parsed.role === 'Branch Manager') setView('manager');
+          else if (parsed.role === 'Cashier') setView('cashier');
+          else if (parsed.role === 'Head Chef' || parsed.role === 'Kitchen Staff') setView('kitchen');
+          else setView('pos');
         }
-      } catch { /* ignore corrupted cache */ }
-    }
-    return null;
-  });
-  const [user, setUser] = useState<any>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const cached = localStorage.getItem('krown_staff_profile');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (parsed?.id && parsed?.email) {
-            return {
-              uid: parsed.id,
-              displayName: parsed.name,
-              email: parsed.email,
-              photoURL: parsed.avatar,
-              assignedBranchId: parsed.assignedBranchId || null,
-            };
-          }
-        }
-      } catch { /* ignore */ }
-    }
-    return null;
-  });
-  const [loading, setLoading] = useState(false);
-  const [view, setView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | 'super_admin'>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const cached = localStorage.getItem('krown_staff_profile');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (parsed?.role) {
-            if (parsed.role === 'Super Admin') return 'super_admin';
-            if (parsed.role === 'Restaurant Admin') return 'admin';
-            if (parsed.role === 'Branch Manager') return 'manager';
-            if (parsed.role === 'Cashier') return 'cashier';
-            if (parsed.role === 'Head Chef' || parsed.role === 'Kitchen Staff') return 'kitchen';
-          }
-        }
-      } catch { /* ignore */ }
-    }
-    return 'pos';
-  });
+      }
+    } catch { /* ignore corrupted cache */ }
+    setLoading(false);
+  }, []);
   const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
   const [pendingView, setPendingView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | null>(null);
 
@@ -132,33 +114,41 @@ export default function AppRouter() {
     }]);
   }, [activeStaff]);
 
+  // Validate cached session with API in background. If the token is still
+  // valid, the response refreshes the staff profile. If expired/invalid,
+  // we clear the cache and show the login form. This effect only runs once
+  // on mount, AFTER the hydration effect has already set the initial state.
   useEffect(() => {
-    // If cached staff was loaded during render, skip API check
-    if (activeStaff) {
+    // If no cached staff was found by the hydration effect, nothing to validate
+    if (!localStorage.getItem('krown_staff_profile')) {
+      setLoading(false);
       dataStore.refresh().catch(() => {});
       return;
     }
-
-    // Slow path: validate token with API
-    const token = localStorage.getItem('krown_session_token') || '';
-    if (!token) return;
 
     const controller = new AbortController();
     const apiTimeout = setTimeout(() => controller.abort(), 5000);
 
     fetch('/api/auth/session', {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${localStorage.getItem('krown_session_token') || ''}` },
       signal: controller.signal,
     })
       .then(r => r.json())
       .then(json => {
         const authUser = json?.session?.user;
         if (!authUser) {
-          localStorage.removeItem('krown_session_token');
-          sessionStorage.removeItem('krown_active_session');
-          localStorage.removeItem('krown_staff_profile');
+          // Token expired — clear cache and show login form,
+          // but only if the user hasn't logged in since this effect started
+          if (!didLoginRef.current) {
+            localStorage.removeItem('krown_session_token');
+            sessionStorage.removeItem('krown_active_session');
+            localStorage.removeItem('krown_staff_profile');
+            setActiveStaff(null);
+            setUser(null);
+          }
           return;
         }
+        // Token still valid — refresh staff profile from server
         const staff: StaffMember = {
           id: authUser.id,
           name: authUser.name || authUser.email?.split('@')[0] || 'Staff',
@@ -186,9 +176,7 @@ export default function AppRouter() {
         else setView('pos');
       })
       .catch(() => {
-        localStorage.removeItem('krown_session_token');
-        sessionStorage.removeItem('krown_active_session');
-        localStorage.removeItem('krown_staff_profile');
+        // Network error — keep cached session, just refresh data
       })
       .finally(() => {
         clearTimeout(apiTimeout);
@@ -346,6 +334,7 @@ export default function AppRouter() {
         setIsSubmitting(false);
         return;
       }
+      didLoginRef.current = true;
       setUser({
         uid: foundStaff.id,
         displayName: foundStaff.name,
@@ -514,6 +503,7 @@ export default function AppRouter() {
         return;
       }
 
+      didLoginRef.current = true;
       setUser({
         uid: foundStaff.id,
         displayName: foundStaff.name,
