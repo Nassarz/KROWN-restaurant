@@ -8,6 +8,7 @@ import KitchenPage from '@/components/kitchen';
 import CashierDashboard from '@/components/cashier';
 import SuperAdminDashboard from '@/components/super-admin';
 import DashboardAuth from '@/components/dashboard-auth';
+import ErrorBoundary from '@/components/error-boundary';
 import { UtensilsCrossed, Lock, Mail, ShieldAlert } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { StaffMember } from '@/lib/mockData';
@@ -703,7 +704,7 @@ export default function AppRouter() {
   }
 
   return (
-    <>
+    <ErrorBoundary>
       <AnimatePresence mode="wait">
         {view === 'pos' && (
           <motion.div key="pos" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -15 }} transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }} className="h-screen w-full absolute top-0 left-0 bg-[#F4F4F6] dark:bg-[#0A0A0C]">
@@ -755,6 +756,6 @@ export default function AppRouter() {
           />
         )}
       </AnimatePresence>
-    </>
+    </ErrorBoundary>
   );
 }

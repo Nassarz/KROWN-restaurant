@@ -9,6 +9,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  if (!hasPermission(ctx.role, 'print_jobs:create') && !hasPermission(ctx.role, 'print_jobs:update')) {
+    return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+  }
+
   try {
     const orderId = request.nextUrl.searchParams.get('orderId') || undefined;
     const printJobs = await printService.listPrintJobs(ctx, orderId);

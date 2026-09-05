@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const staffId = request.nextUrl.searchParams.get('staff_id') || ctx.userId;
+    const staffId = ctx.userId;
     const devices = await listTrustedDevices(ctx, staffId);
 
     return NextResponse.json({ data: devices });
@@ -26,14 +26,14 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { staff_id, fingerprint, name, browser, os } = body;
+    const { fingerprint, name, browser, os } = body;
 
-    if (!staff_id || !fingerprint) {
-      return NextResponse.json({ error: 'staff_id and fingerprint are required' }, { status: 400 });
+    if (!fingerprint) {
+      return NextResponse.json({ error: 'fingerprint is required' }, { status: 400 });
     }
 
     const ip = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || undefined;
-    const device = await createTrustedDevice(ctx, staff_id, fingerprint, name, browser, os, ip || undefined);
+    const device = await createTrustedDevice(ctx, ctx.userId, fingerprint, name, browser, os, ip || undefined);
 
     return NextResponse.json({ data: device }, { status: 201 });
   } catch (e: any) {

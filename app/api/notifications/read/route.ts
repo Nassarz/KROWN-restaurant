@@ -9,8 +9,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const body = await request.json().catch(() => ({}));
-    const recipientId = body.recipient_id || ctx.userId;
+    const recipientId = ctx.userId;
 
     const count = await markAllAsRead(ctx, recipientId);
     return NextResponse.json({ data: { marked: count } });

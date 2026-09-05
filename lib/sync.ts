@@ -88,9 +88,12 @@ export async function syncOfflineQueue(): Promise<{ synced: number; failed: numb
 
   for (const op of ops) {
     try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('krown_session_token') || '' : '';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
       const res = await fetch(op.endpoint, {
         method: op.method,
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         credentials: 'include',
         body: JSON.stringify(op.body),
       });

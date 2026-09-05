@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getOrder } from '@/lib/services/order.service';
 import { extractTenantContext } from '@/lib/tenant';
+import { hasPermission } from '@/lib/rbac';
 
 export async function GET(
   request: NextRequest,
@@ -9,6 +10,10 @@ export async function GET(
   const ctx = extractTenantContext(request);
   if (!ctx) {
     return NextResponse.json({ error: 'Missing tenant context' }, { status: 401 });
+  }
+
+  if (!hasPermission(ctx.role, 'orders:view')) {
+    return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
   }
 
   try {

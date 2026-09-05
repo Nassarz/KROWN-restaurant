@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSql } from '@/lib/neon-server';
 import { extractTenantContext, setTenantContext } from '@/lib/tenant';
+import { hasPermission } from '@/lib/rbac';
 
 export async function POST(request: NextRequest) {
   const ctx = extractTenantContext(request);
   if (!ctx) {
     return NextResponse.json({ data: null, error: 'Unauthorized' }, { status: 401 });
+  }
+
+  if (!hasPermission(ctx.role, 'orders:create') && !hasPermission(ctx.role, 'inventory:update')) {
+    return NextResponse.json({ data: null, error: 'Insufficient permissions' }, { status: 403 });
   }
 
   try {

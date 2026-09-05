@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const recipientId = request.nextUrl.searchParams.get('recipient_id') || ctx.userId;
+    const recipientId = ctx.userId;
     const type = request.nextUrl.searchParams.get('type') || undefined;
     const unread_only = request.nextUrl.searchParams.get('unread_only') === 'true';
     const limit = parseInt(request.nextUrl.searchParams.get('limit') || '50', 10);

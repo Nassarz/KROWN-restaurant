@@ -25,15 +25,19 @@ export default function KitchenPage({ setView, activeStaff }: { setView: (v: 'po
   }, []);
 
   useEffect(() => {
+    // Clear auto-print tracking when branch changes
+    autoPrinted.current.clear();
+    const printedRef = autoPrinted.current;
+
     const syncOrders = () => {
       const startOfToday = new Date();
       startOfToday.setHours(0, 0, 0, 0);
       const startOfTodayMs = startOfToday.getTime();
       const live = dataStore.getOrders(activeBranchId, startOfTodayMs).filter(o => o.status === 'pending' || o.status === 'preparing');
       setOrders(live);
-      const fresh = live.filter(o => !autoPrinted.current.has(o.id));
+      const fresh = live.filter(o => !printedRef.has(o.id));
       fresh.forEach(o => {
-        autoPrinted.current.add(o.id);
+        printedRef.add(o.id);
         printTicket('prep', o);
       });
       if (fresh.length > 0) notify('new-order');
@@ -41,7 +45,10 @@ export default function KitchenPage({ setView, activeStaff }: { setView: (v: 'po
 
     syncOrders();
     const unsub = dataStore.subscribe(syncOrders);
-    return () => unsub();
+    return () => {
+      unsub();
+      printedRef.clear();
+    };
   }, [activeBranchId]);
 
   const updateOrderStatus = (order: any, newStatus: any) => {

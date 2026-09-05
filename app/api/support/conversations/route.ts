@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { extractTenantContext } from '@/lib/tenant';
 import { listConversations, createConversation } from '@/lib/services/support.service';
+import { hasPermission } from '@/lib/rbac';
 
 export async function GET(request: NextRequest) {
   try {
     const ctx = extractTenantContext(request);
     if (!ctx) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    if (!hasPermission(ctx.role, 'support:view')) {
+      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 
     const status = request.nextUrl.searchParams.get('status') || undefined;
@@ -27,6 +32,10 @@ export async function POST(request: NextRequest) {
     const ctx = extractTenantContext(request);
     if (!ctx) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    if (!hasPermission(ctx.role, 'support:create')) {
+      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 
     const body = await request.json();

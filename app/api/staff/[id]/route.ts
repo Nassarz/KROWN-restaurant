@@ -12,20 +12,20 @@ export async function GET(
   try {
     const ctx = extractTenantContext(request);
     if (!ctx) {
-      return NextResponse.json({ data: null, error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { id } = await params;
     const staff = await getStaff(ctx, id);
 
     if (!staff) {
-      return NextResponse.json({ data: null, error: 'Staff not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Staff not found' }, { status: 404 });
     }
 
     return NextResponse.json({ data: staff });
   } catch (e: any) {
     return NextResponse.json(
-      { data: null, error: e.message || 'Internal server error' },
+      { error: e.message || 'Internal server error' },
       { status: 500 }
     );
   }
@@ -38,11 +38,11 @@ export async function PUT(
   try {
     const ctx = extractTenantContext(request);
     if (!ctx) {
-      return NextResponse.json({ data: null, error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     if (!hasPermission(ctx.role, 'staff:update')) {
-      return NextResponse.json({ data: null, error: 'Insufficient permissions' }, { status: 403 });
+      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 
     const { id } = await params;
@@ -64,7 +64,7 @@ export async function PUT(
     return NextResponse.json({ data: staff });
   } catch (e: any) {
     return NextResponse.json(
-      { data: null, error: e.message || 'Internal server error' },
+      { error: e.message || 'Internal server error' },
       { status: 500 }
     );
   }
@@ -77,11 +77,11 @@ export async function DELETE(
   try {
     const ctx = extractTenantContext(request);
     if (!ctx) {
-      return NextResponse.json({ data: null, error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     if (!hasPermission(ctx.role, 'staff:delete')) {
-      return NextResponse.json({ data: null, error: 'Insufficient permissions' }, { status: 403 });
+      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 
     const { id } = await params;
@@ -90,7 +90,7 @@ export async function DELETE(
     return NextResponse.json({ data: { success: true } });
   } catch (e: any) {
     return NextResponse.json(
-      { data: null, error: e.message || 'Internal server error' },
+      { error: e.message || 'Internal server error' },
       { status: 500 }
     );
   }
@@ -103,11 +103,11 @@ export async function PATCH(
   try {
     const ctx = extractTenantContext(request);
     if (!ctx) {
-      return NextResponse.json({ data: null, error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     if (!hasPermission(ctx.role, 'staff:update') && !hasPermission(ctx.role, 'staff:reset_pin')) {
-      return NextResponse.json({ data: null, error: 'Insufficient permissions' }, { status: 403 });
+      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 
     const { id } = await params;
@@ -119,7 +119,7 @@ export async function PATCH(
     if (password) {
       const passwordHash = await hashPassword(password);
       await sql`
-        UPDATE staff SET password_hash = ${password}, password_argon2 = ${passwordHash}, updated_at = NOW()
+        UPDATE staff SET password_argon2 = ${passwordHash}, updated_at = NOW()
         WHERE id = ${id} AND organization_id = ${ctx.organizationId}
       `;
     }
@@ -136,7 +136,7 @@ export async function PATCH(
     return NextResponse.json({ data: staff });
   } catch (e: any) {
     return NextResponse.json(
-      { data: null, error: e.message || 'Internal server error' },
+      { error: e.message || 'Internal server error' },
       { status: 500 }
     );
   }
