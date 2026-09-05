@@ -5,8 +5,8 @@ import type { TokenPayload } from './auth';
 import { getUserFromRequest, verifyTokenSync } from './auth';
 
 export interface TenantContext { organizationId: string; userId: string; role: string; branchId: string | null; isSuperAdmin: boolean; }
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Synchronous route-safe extraction. JWT signature, issuer and expiry are verified before identity is accepted. */
 export function extractTenantContext(request: Request): TenantContext | null {
   const authorization = request.headers.get('authorization');
   const bearer = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
@@ -17,7 +17,6 @@ export function extractTenantContext(request: Request): TenantContext | null {
   return payload ? extractTenantFromPayload(payload) : null;
 }
 
-/** Async version additionally checks that the user's current DB role/tenant/branch still matches the session. */
 export async function extractVerifiedTenantContext(request: Request): Promise<TenantContext | null> {
   const payload = await getUserFromRequest(request);
   return payload ? extractTenantFromPayload(payload) : null;
@@ -28,13 +27,23 @@ export function extractTenantFromPayload(payload: TokenPayload): TenantContext {
 }
 
 export async function setTenantContext(sql: any, organizationId: string): Promise<void> {
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!uuidRegex.test(organizationId)) throw new Error('Invalid organization ID format');
+  if (!UUID_RE.test(organizationId)) throw new Error('Invalid organization ID format');
   await sql`SELECT set_config('app.org', ${organizationId}, false)`;
 }
 
 export function withTenant<T extends (...args: any[]) => Promise<any>>(fn: T): T { return (async (...args: any[]) => { const ctx = args[0] as TenantContext; if (!ctx?.organizationId) throw new Error('Tenant context required'); return fn(...args); }) as T; }
-export function tenantFilter(columnAlias: string, ctx: TenantContext): string { return ctx.isSuperAdmin ? 'TRUE' : `${columnAlias} = '${ctx.organizationId}'`; }
+
+/**
+ * Legacy SQL-fragment helper retained for compatibility. The organization ID
+ * is accepted only after strict UUID validation; new code should prefer
+ * parameterized tagged SQL (`WHERE organization_id = ${ctx.organizationId}`).
+ */
+export function tenantFilter(columnAlias: string, ctx: TenantContext): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(columnAlias)) throw new Error('Invalid SQL column alias');
+  if (ctx.isSuperAdmin) return 'TRUE';
+  if (!UUID_RE.test(ctx.organizationId)) throw new Error('Invalid organization ID format');
+  return `${columnAlias} = '${ctx.organizationId}'`;
+}
 
 export async function getOrganization(orgId: string) { const sql = getSql(); const rows = await sql`SELECT * FROM organizations WHERE id=${orgId} LIMIT 1`; return rows[0] || null; }
 export async function getOrganizationBySlug(slug: string) { const sql = getSql(); const rows = await sql`SELECT * FROM organizations WHERE slug=${slug} LIMIT 1`; return rows[0] || null; }
