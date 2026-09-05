@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Plus, Edit3, Image as ImageIcon, Loader2, Trash2, X, ChevronDown, Check } from 'lucide-react';
 import { vibrate, getCategoryIcon } from '@/lib/utils';
@@ -223,7 +224,7 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     {product.image?.startsWith('http') ? (
-                      <img src={product.image} alt={product.name} className="w-12 h-12 rounded-xl object-cover" />
+                      <Image src={product.image} alt={product.name} width={48} height={48} className="w-12 h-12 rounded-xl object-cover" unoptimized />
                     ) : (
                       <div className="w-12 h-12 rounded-xl bg-orange-500/10 text-orange-500 flex items-center justify-center font-bold text-lg">
                         {product.image || '🍲'}
@@ -510,7 +511,7 @@ export default function ManagerMenu({ products, user, branchId }: { products: an
                     </label>
                   </div>
                   {formData.image.startsWith('http') && (
-                    <img src={formData.image} alt="Preview" className="w-16 h-16 object-cover rounded-xl mt-2" />
+                    <Image src={formData.image} alt="Preview" width={64} height={64} className="w-16 h-16 object-cover rounded-xl mt-2" unoptimized />
                   )}
                 </div>
                 <div className="flex gap-3 pt-3">

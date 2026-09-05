@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Home, Grid, UtensilsCrossed, ShoppingCart, Clock, 
@@ -616,7 +617,7 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
                       >
                         <div className="w-full aspect-square bg-slate-50 dark:bg-black/20 rounded-2xl mb-4 overflow-hidden flex items-center justify-center relative shadow-inner">
                           {product.image?.startsWith('http') ? (
-                            <img src={product.image} alt={product.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
+                            <Image src={product.image} alt={product.name} fill sizes="(max-width: 768px) 50vw, 25vw" className="object-cover group-hover:scale-110 transition-transform duration-500" unoptimized />
                           ) : (
                             <span className="text-6xl group-hover:scale-110 transition-transform duration-500">{product.image}</span>
                           )}
@@ -999,7 +1000,7 @@ export default function POSPage({ user, setView, activeStaff }: { user: any; set
                   className="flex items-center gap-4 bg-slate-50 dark:bg-black/20 p-3 rounded-2xl border border-black/5 dark:border-white/5 shadow-sm"
                 >
                   <div className="text-3xl bg-white dark:bg-black/40 w-12 h-12 rounded-xl flex items-center justify-center shadow-sm overflow-hidden">
-                    {item.image?.startsWith('http') ? <img src={item.image} alt={item.name} className="w-full h-full object-cover" /> : item.image}
+                    {item.image?.startsWith('http') ? <Image src={item.image} alt={item.name} width={48} height={48} className="w-full h-full object-cover" unoptimized /> : item.image}
                   </div>
                   <div className="flex-1 min-w-0">
                     <h4 className="font-bold text-slate-900 dark:text-white truncate">{item.name}</h4>

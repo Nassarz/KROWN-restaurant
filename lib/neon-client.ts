@@ -6,6 +6,18 @@
 
 const API_BASE = typeof window !== 'undefined' ? '' : 'http://localhost:3000';
 
+// Debounce TOKEN_EXPIRED events to prevent redundant triggers from concurrent 401s
+let tokenExpiredTimeout: ReturnType<typeof setTimeout> | null = null;
+function debouncedTokenExpired() {
+  if (tokenExpiredTimeout) return;
+  tokenExpiredTimeout = setTimeout(() => {
+    tokenExpiredTimeout = null;
+    if (typeof window !== 'undefined') {
+      notifyAuthListeners('TOKEN_EXPIRED', null);
+    }
+  }, 300);
+}
+
 async function apiFetch(path: string, options?: RequestInit): Promise<any> {
   const url = `${API_BASE}${path}`;
   // Always include the JWT token from localStorage for Authorization header
@@ -24,11 +36,13 @@ async function apiFetch(path: string, options?: RequestInit): Promise<any> {
   });
 
   if (res.status === 401) {
-    // Token expired or invalid — clear session
-    if (typeof window !== 'undefined') {
-      notifyAuthListeners('TOKEN_EXPIRED', null);
-    }
+    // Token expired or invalid — clear session (debounced to prevent redundant events)
+    debouncedTokenExpired();
     throw new Error('Session expired. Please log in again.');
+  }
+
+  if (res.status === 429) {
+    throw new Error('Too many requests. Please wait a moment and try again.');
   }
 
   if (!res.ok) {

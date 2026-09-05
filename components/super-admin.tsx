@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ChevronLeft, Users, Store, Activity, Settings, TrendingUp, Box, Shield,
@@ -1544,7 +1545,7 @@ export default function SuperAdminPage({ user, setView, activeStaff, initialTab 
                           <tr key={s.id} className="hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
                             <td className="py-4 px-6">
                               <div className="flex items-center gap-3">
-                                <img src={s.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(s.name || 'U')}&background=f97316&color=fff&bold=true&size=80`} alt="" className="w-9 h-9 rounded-xl object-cover" />
+                                <Image src={s.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(s.name || 'U')}&background=f97316&color=fff&bold=true&size=80`} alt="" width={36} height={36} className="w-9 h-9 rounded-xl object-cover" unoptimized />
                                 <div>
                                   <p className="font-bold text-slate-900 dark:text-white text-sm">{s.name}</p>
                                   <p className="text-[11px] text-slate-500">{s.email}</p>

@@ -92,6 +92,8 @@ export default function CashierDashboard({ setView, activeStaff }: { setView: (v
       clearTimeout(t);
       clearInterval(interval);
     };
+    // refreshPrintJobs and checkPrinterHealth are stable component-scoped functions
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrder]);
 
   // ── ENTERPRISE SPLIT BILL STATE ─────────────────────────────────────────────
@@ -264,6 +266,8 @@ export default function CashierDashboard({ setView, activeStaff }: { setView: (v
     syncData();
     const unsub = dataStore.subscribe(syncData);
     return () => unsub();
+    // selectedCompanyId is read inside syncData for default selection only
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBranchId]);
 
   const availableCompanyStaff = dataStore.getCompanyStaff(selectedCompanyId);

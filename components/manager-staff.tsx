@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Users as UsersIcon, Plus, Mail, Building2, Phone, CreditCard,
@@ -344,6 +345,7 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-center gap-4">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={u.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name)}&background=f97316&color=fff&bold=true&size=200`}
                       alt={u.name}
@@ -495,7 +497,7 @@ export default function ManagerStaff({ currentBranchId }: { currentBranchId?: st
                   <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">Staff Photo</label>
                   <div className="flex items-center gap-4 bg-slate-50 dark:bg-black/30 p-3 rounded-2xl border border-black/10 dark:border-white/10">
                     {previewUrl || avatarUrl ? (
-                      <img src={previewUrl || avatarUrl} alt="Preview" className="w-16 h-16 rounded-2xl object-cover ring-2 ring-orange-500" />
+                      <Image src={previewUrl || avatarUrl} alt="Preview" width={64} height={64} className="w-16 h-16 rounded-2xl object-cover ring-2 ring-orange-500" unoptimized />
                     ) : (
                       <div className="w-16 h-16 bg-slate-200 dark:bg-white/10 rounded-2xl flex items-center justify-center text-slate-400">
                         <ImageIcon className="w-8 h-8" />

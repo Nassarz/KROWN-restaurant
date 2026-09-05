@@ -49,6 +49,8 @@ export default function KitchenPage({ setView, activeStaff }: { setView: (v: 'po
       unsub();
       printedRef.clear();
     };
+    // notify is a stable hook reference, printTicket is module-level
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeBranchId]);
 
   const updateOrderStatus = (order: any, newStatus: any) => {

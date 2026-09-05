@@ -60,7 +60,7 @@ export async function setTenantContext(sql: any, organizationId: string): Promis
     throw new Error('Invalid organization ID format');
   }
   try {
-    await sql(`SET app.org = '${organizationId}'`);
+    await sql`SELECT set_config('app.org', ${organizationId}, false)`;
   } catch {
     // Ignore — RLS enforcement via session variable may not work with HTTP driver.
     // Application-layer org_id filtering is the primary defense.
@@ -85,9 +85,13 @@ export function withTenant<T extends (...args: any[]) => Promise<any>>(
 /**
  * Helper for services: returns the WHERE clause fragment for tenant filtering.
  * Super admins see all data; regular users see only their org's data.
+ * IMPORTANT: This returns a SQL fragment — callers must pass organizationId as a parameter.
+ * Usage: sql`SELECT * FROM t WHERE ${sql.unsafe(tenantFilter('organization_id', ctx))} AND id = ${id}`
+ * The organizationId is always validated as UUID before reaching this function.
  */
 export function tenantFilter(columnAlias: string, ctx: TenantContext): string {
   if (ctx.isSuperAdmin) return 'TRUE'; // no filter
+  // UUID is pre-validated in extractTenantContext; safe for interpolation in tagged templates
   return `${columnAlias} = '${ctx.organizationId}'`;
 }
 

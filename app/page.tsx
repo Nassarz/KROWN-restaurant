@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, startTransition } from 'react';
+import Image from 'next/image';
 import POSPage from '@/components/pos';
 import AdminPage from '@/components/admin';
 import ManagerPage from '@/components/manager';
@@ -70,24 +71,26 @@ export default function AppRouter() {
         const parsed = JSON.parse(cached);
         if (parsed?.id && parsed?.email && parsed?.role) {
           sessionStorage.setItem('krown_active_session', 'true');
-          setActiveStaff(parsed);
-          setUser({
-            uid: parsed.id,
-            displayName: parsed.name,
-            email: parsed.email,
-            photoURL: parsed.avatar,
-            assignedBranchId: parsed.assignedBranchId || null,
+          startTransition(() => {
+            setActiveStaff(parsed);
+            setUser({
+              uid: parsed.id,
+              displayName: parsed.name,
+              email: parsed.email,
+              photoURL: parsed.avatar,
+              assignedBranchId: parsed.assignedBranchId || null,
+            });
+            if (parsed.role === 'Super Admin') setView('super_admin');
+            else if (parsed.role === 'Restaurant Admin') setView('admin');
+            else if (parsed.role === 'Branch Manager') setView('manager');
+            else if (parsed.role === 'Cashier') setView('cashier');
+            else if (parsed.role === 'Head Chef' || parsed.role === 'Kitchen Staff') setView('kitchen');
+            else setView('pos');
           });
-          if (parsed.role === 'Super Admin') setView('super_admin');
-          else if (parsed.role === 'Restaurant Admin') setView('admin');
-          else if (parsed.role === 'Branch Manager') setView('manager');
-          else if (parsed.role === 'Cashier') setView('cashier');
-          else if (parsed.role === 'Head Chef' || parsed.role === 'Kitchen Staff') setView('kitchen');
-          else setView('pos');
         }
       }
     } catch { /* ignore corrupted cache */ }
-    setLoading(false);
+    startTransition(() => setLoading(false));
   }, []);
   const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
   const [pendingView, setPendingView] = useState<'pos' | 'admin' | 'manager' | 'kitchen' | 'cashier' | null>(null);
@@ -122,7 +125,7 @@ export default function AppRouter() {
   useEffect(() => {
     // If no cached staff was found by the hydration effect, nothing to validate
     if (!localStorage.getItem('krown_staff_profile')) {
-      setLoading(false);
+      startTransition(() => setLoading(false));
       dataStore.refresh().catch(() => {});
       return;
     }
@@ -554,10 +557,13 @@ export default function AppRouter() {
         <div className="w-full max-w-md bg-white/80 dark:bg-[#121214]/80 backdrop-blur-2xl p-8 rounded-[2.5rem] shadow-2xl border border-black/5 dark:border-white/10 ring-1 ring-black/5 dark:ring-white/10">
           <div className="flex flex-col items-center mb-6">
             <div className="w-20 h-20 rounded-3xl flex items-center justify-center shadow-xl shadow-orange-500/30 mb-4 p-1 overflow-hidden ring-4 ring-orange-500/20 bg-gradient-to-br from-orange-500 to-amber-500">
-              <img
+              <Image
                 src="/icon.svg"
                 alt="KROWN ERP Logo"
+                width={80}
+                height={80}
                 className="w-full h-full object-contain rounded-2xl"
+                priority
               />
             </div>
             <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white text-center">KROWN ERP</h1>
