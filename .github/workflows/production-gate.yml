@@ -2,7 +2,7 @@ name: KROWN Production Gate
 
 on:
   push:
-    branches: [security-audit-20260906]
+    branches: [main, security-audit-20260906]
   pull_request:
     branches: [main, security-audit-20260906]
 
