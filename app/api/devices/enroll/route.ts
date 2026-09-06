@@ -1,6 +1,7 @@
-import { randomBytes, createHash } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSql } from '@/lib/neon-server';
+import { generateId } from '@/lib/id';
 
 function clean(value: unknown, max: number) {
   return String(value || '').trim().slice(0, max);
@@ -27,8 +28,8 @@ export async function POST(request: NextRequest) {
 
     const sql = getSql();
     const tokenHash = createHash('sha256').update(token).digest('hex');
-    const deviceId = randomBytes(16).toString('hex');
-    const publicReference = `DEV-${randomBytes(5).toString('hex').toUpperCase()}`;
+    const deviceId = generateId();
+    const publicReference = `DEV-${deviceId.replace(/-/g, '').slice(0, 10).toUpperCase()}`;
 
     const rows = await sql`WITH claimed AS (
       UPDATE device_enrollment_tokens
