@@ -1,22 +1,16 @@
-// KROWN POS — Next.js Middleware
-// Runs on every request. Handles JWT verification, tenant context, rate limiting.
+// KROWN POS — Next.js API Middleware
+// Cryptographic JWT gate + coarse rate limiting. Route handlers remain the
+// authoritative source for database-backed session, tenant and RBAC checks.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { jwtVerify } from 'jose';
 
-const JWT_SECRET = (() => {
-  const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('FATAL: JWT_SECRET environment variable is required in production');
-    }
-    console.warn('⚠ JWT_SECRET not set — using dev fallback. Set JWT_SECRET in production!');
-    return new TextEncoder().encode('krown-dev-secret-change-in-production');
-  }
-  return new TextEncoder().encode(secret);
-})();
+const configuredSecret = process.env.JWT_SECRET;
+if (!configuredSecret || configuredSecret.length < 32) {
+  throw new Error('JWT_SECRET must be configured and at least 32 characters long.');
+}
+const JWT_SECRET = new TextEncoder().encode(configuredSecret);
 
-// Public routes that don't require auth
 const PUBLIC_ROUTES = [
   '/api/auth/login',
   '/api/auth/pin-login',
@@ -30,103 +24,91 @@ const PUBLIC_ROUTES = [
   '/sw.js',
 ];
 
-// Rate limiting store (in-memory, production should use Redis)
+// This is intentionally a best-effort per-process limiter. It protects a
+// single runtime instance; distributed deployments should additionally use a
+// shared limiter at the edge/API gateway.
 const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
 
 function checkRateLimit(key: string, maxRequests: number, windowMs: number): boolean {
   const now = Date.now();
   const entry = rateLimitStore.get(key);
-
   if (!entry || now > entry.resetAt) {
     rateLimitStore.set(key, { count: 1, resetAt: now + windowMs });
     return true;
   }
-
-  if (entry.count >= maxRequests) {
-    return false;
-  }
-
-  entry.count++;
+  if (entry.count >= maxRequests) return false;
+  entry.count += 1;
   return true;
 }
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Skip middleware for public/static routes
   if (PUBLIC_ROUTES.some(route => pathname.startsWith(route))) {
     return NextResponse.next();
   }
 
-  // Skip middleware for non-API routes (client-side handles its own auth)
   if (!pathname.startsWith('/api/')) {
     return NextResponse.next();
   }
 
-  // Rate limiting
-  const ip = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
-  const rateLimitKey = `api:${ip}`;
-  if (!checkRateLimit(rateLimitKey, 100, 60000)) {
-    return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 });
+  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+    || request.headers.get('x-real-ip')
+    || 'unknown';
+
+  if (!checkRateLimit(`api:${ip}`, 100, 60_000)) {
+    return NextResponse.json({ success: false, error: { code: 'RATE_LIMITED', message: 'Too many requests' } }, { status: 429 });
   }
 
-  // Auth endpoints have stricter rate limiting
   if (pathname.startsWith('/api/auth/')) {
-    const authKey = `auth:${ip}`;
-    if (!checkRateLimit(authKey, 5, 60000)) {
-      return NextResponse.json({ error: 'Too many login attempts' }, { status: 429 });
+    if (!checkRateLimit(`auth:${ip}`, 5, 60_000)) {
+      return NextResponse.json({ success: false, error: { code: 'AUTH_RATE_LIMITED', message: 'Too many authentication attempts' } }, { status: 429 });
     }
   }
 
-  // Extract token from Authorization header or cookie
   const authHeader = request.headers.get('authorization');
-  const token = authHeader?.replace('Bearer ', '') || request.cookies.get('krown_session')?.value;
+  const bearer = authHeader?.match(/^Bearer\s+(.+)$/i)?.[1];
+  const token = bearer || request.cookies.get('krown_session')?.value;
 
   if (!token) {
-    return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    return NextResponse.json({ success: false, error: { code: 'AUTH_REQUIRED', message: 'Authentication required' } }, { status: 401 });
   }
 
   try {
-    // Verify JWT
-    const { payload } = await jwtVerify(token, JWT_SECRET);
-
-    // Extract tenant context
-    const orgId = payload.org as string;
-    const userId = payload.sub as string;
-    const role = payload.role as string;
-    const branchId = payload.branch as string | null;
-
-    if (!orgId || !userId) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
-    }
-
-    // Check if Super Admin route
-    if (pathname.startsWith('/api/super-admin/')) {
-      if (role !== 'super_admin') {
-        return NextResponse.json({ error: 'Super Admin access required' }, { status: 403 });
-      }
-    }
-
-    // Add tenant context to request headers for downstream use
-    const requestHeaders = new Headers(request.headers);
-    requestHeaders.set('x-org-id', orgId);
-    requestHeaders.set('x-user-id', userId);
-    requestHeaders.set('x-user-role', role);
-    if (branchId) {
-      requestHeaders.set('x-branch-id', branchId);
-    }
-
-    return NextResponse.next({
-      request: { headers: requestHeaders },
+    const { payload } = await jwtVerify(token, JWT_SECRET, {
+      issuer: 'krown-pos',
+      algorithms: ['HS256'],
     });
-  } catch (err: any) {
-    if (err.code === 'ERR_JWT_EXPIRED') {
-      return NextResponse.json({ error: 'Token expired' }, { status: 401 });
+
+    if (typeof payload.sub !== 'string' || typeof payload.org !== 'string' || typeof payload.role !== 'string') {
+      return NextResponse.json({ success: false, error: { code: 'INVALID_TOKEN', message: 'Invalid authentication token' } }, { status: 401 });
     }
-    return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+
+    if (pathname.startsWith('/api/super-admin/') && payload.role !== 'super_admin') {
+      return NextResponse.json({ success: false, error: { code: 'FORBIDDEN', message: 'Super Admin access required' } }, { status: 403 });
+    }
+
+    // These headers are derived from the verified token and are informational
+    // context only. Application routes must never trust client-supplied values;
+    // critical handlers call extractVerifiedTenantContext/getSession directly.
+    const requestHeaders = new Headers(request.headers);
+    requestHeaders.set('x-krown-authenticated', 'true');
+    requestHeaders.set('x-org-id', payload.org);
+    requestHeaders.set('x-user-id', payload.sub);
+    requestHeaders.set('x-user-role', payload.role);
+    if (typeof payload.branch === 'string') requestHeaders.set('x-branch-id', payload.branch);
+
+    return NextResponse.next({ request: { headers: requestHeaders } });
+  } catch (error: unknown) {
+    const code = typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code)
+      : '';
+    const expired = code === 'ERR_JWT_EXPIRED';
+    return NextResponse.json({
+      success: false,
+      error: { code: expired ? 'SESSION_EXPIRED' : 'INVALID_TOKEN', message: expired ? 'Session expired' : 'Invalid authentication token' },
+    }, { status: 401 });
   }
 }
 
-export const config = {
-  matcher: ['/api/:path*'],
-};
+export const config = { matcher: ['/api/:path*'] };
