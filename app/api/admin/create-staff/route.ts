@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { extractVerifiedTenantContext, setTenantContext } from '@/lib/tenant';
 import { getSql } from '@/lib/neon-server';
-import { extractTenantContext, setTenantContext } from '@/lib/tenant';
 import { hashPassword } from '@/lib/auth';
 import { generateId } from '@/lib/id';
 import { canManageRole, normalizeRole, isPlatformRole } from '@/lib/rbac';
 import { assertBranchAccess } from '@/lib/access-control';
 
 export async function POST(req: NextRequest) {
-  const ctx = extractTenantContext(req);
+  const ctx = await extractVerifiedTenantContext(req);
   if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!canManageRole(ctx.role, 'cashier') && !isPlatformRole(ctx.role) && normalizeRole(ctx.role) !== 'restaurant_admin') return NextResponse.json({ error: 'Forbidden: insufficient permissions' }, { status: 403 });
 
