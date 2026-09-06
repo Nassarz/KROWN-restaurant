@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { listOrders, createOrder } from '@/lib/services/order.service';
-import { extractTenantContext } from '@/lib/tenant';
+import { extractVerifiedTenantContext } from '@/lib/tenant';
 import { hasPermission } from '@/lib/rbac';
 import { assertBranchAccess } from '@/lib/access-control';
 
 export async function GET(request: NextRequest) {
-  const ctx = await extractTenantContext(request);
-  if (!ctx) return NextResponse.json({ error: 'Missing tenant context' }, { status: 401 });
+  const ctx = await extractVerifiedTenantContext(request);
+  if (!ctx) return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
   try {
     const branchId = request.nextUrl.searchParams.get('branchId') || ctx.branchId;
     if (!branchId) return NextResponse.json({ error: 'Branch is required' }, { status: 400 });
@@ -24,8 +24,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const ctx = await extractTenantContext(request);
-  if (!ctx) return NextResponse.json({ error: 'Missing tenant context' }, { status: 401 });
+  const ctx = await extractVerifiedTenantContext(request);
+  if (!ctx) return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
   if (!hasPermission(ctx.role, 'orders:create')) return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
   try {
     const body = await request.json();
@@ -35,22 +35,24 @@ export async function POST(request: NextRequest) {
     const items = (body.items || []).map((item: any) => ({ productId: item.productId || item.product_id, quantity: Number(item.quantity || 1), notes: item.notes, addOns: item.addOns || item.add_ons }));
     if (!items.length) return NextResponse.json({ error: 'At least one order item is required' }, { status: 400 });
     if (items.some((item: any) => !item.productId || !Number.isFinite(item.quantity) || item.quantity <= 0)) return NextResponse.json({ error: 'Invalid order item' }, { status: 400 });
+    const idempotencyKey = String(body.idempotencyKey || body.idempotency_key || request.headers.get('Idempotency-Key') || '').trim();
+    if (!idempotencyKey || idempotencyKey.length > 128) return NextResponse.json({ error: 'A valid idempotency key is required' }, { status: 400 });
 
-    // Never accept staffId/userId from the browser as the actor. The order is
-    // attributed to the authenticated session identity.
     const order = await createOrder(ctx, {
       branchId,
-      tableNumber: body.table || body.table_number || '1',
+      tableNumber: String(body.table || body.table_number || '1'),
       seat: body.seat,
       items,
       staffId: ctx.userId,
       companyName: body.companyName || body.company_name,
       tin: body.tin,
       companyId: body.companyId || body.company_id,
+      idempotencyKey,
     });
     return NextResponse.json({ data: order }, { status: 201 });
   } catch (error: any) {
-    const status = String(error?.message || '').startsWith('Forbidden') ? 403 : 500;
-    return NextResponse.json({ error: error.message || 'Failed to create order' }, { status });
+    const message = error?.message || 'Failed to create order';
+    const status = /Forbidden/i.test(message) ? 403 : /idempotency|invalid order|branch|required/i.test(message) ? 400 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }
