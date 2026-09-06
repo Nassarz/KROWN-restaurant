@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { Shield, ChevronLeft, Store, Users, Smartphone, ShoppingBag, AlertTriangle, Plus, X, Ban, UserX, UserCheck, Trash2, Loader2 } from 'lucide-react';
+import { ChevronLeft, Store, Users, Smartphone, ShoppingBag, AlertTriangle, Plus, X, Ban, UserX, UserCheck, Trash2, Loader2, KeyRound } from 'lucide-react';
 
 const ROLES = [
   { value: 'admin', label: 'Admin / Restaurant Admin' },
@@ -24,9 +24,12 @@ export default function RestaurantDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [userError, setUserError] = useState<string | null>(null);
   const [showAddUser, setShowAddUser] = useState(false);
+  const [resetUser, setResetUser] = useState<any>(null);
+  const [newPassword, setNewPassword] = useState('');
   const [savingUser, setSavingUser] = useState(false);
+  const [resettingPassword, setResettingPassword] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: '', email: '', phone: '', role: 'cashier', password: '', assignedBranchId: '' });
+  const [form, setForm] = useState({ name: '', email: '', phone: '', role: 'admin', password: '', assignedBranchId: '' });
 
   const token = () => localStorage.getItem('krown_session_token') || '';
   const headers = () => ({ Authorization: `Bearer ${token()}`, 'Content-Type': 'application/json' });
@@ -61,8 +64,6 @@ export default function RestaurantDetailPage() {
   useEffect(() => {
     const t = token();
     if (!t) { router.replace('/'); return; }
-    // This effect intentionally starts the initial data synchronization.
-    // The async loader owns the resulting state updates after the external fetches complete.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadRestaurant();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -75,10 +76,23 @@ export default function RestaurantDetailPage() {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Failed to create user');
       setShowAddUser(false);
-      setForm({ name: '', email: '', phone: '', role: 'cashier', password: '', assignedBranchId: '' });
+      setForm({ name: '', email: '', phone: '', role: 'admin', password: '', assignedBranchId: '' });
       await loadUsers();
     } catch (e: any) { setUserError(e.message || 'Failed to create user'); }
     finally { setSavingUser(false); }
+  };
+
+  const resetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetUser || newPassword.length < 8) return;
+    setResettingPassword(true); setUserError(null);
+    try {
+      const r = await fetch(`/api/super-admin/users/${resetUser.id}`, { method: 'PATCH', headers: headers(), body: JSON.stringify({ action: 'reset_password', password: newPassword }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Failed to reset password');
+      setResetUser(null); setNewPassword('');
+    } catch (e: any) { setUserError(e.message || 'Failed to reset password'); }
+    finally { setResettingPassword(false); }
   };
 
   const userAction = async (id: string, action: 'suspend' | 'ban' | 'activate' | 'restore') => {
@@ -125,11 +139,13 @@ export default function RestaurantDetailPage() {
         <section className="bg-white/80 dark:bg-[#121214]/80 border border-white/40 dark:border-white/5 rounded-3xl overflow-hidden">
           <div className="p-6 border-b border-slate-200/70 dark:border-white/5 flex items-center justify-between"><div><h2 className="text-lg font-black text-slate-900 dark:text-white">Restaurant Users</h2><p className="text-xs text-slate-500 mt-1">Manage Admins, Managers, Cashiers, Waiters and Kitchen Staff</p></div><button onClick={loadUsers} className="text-xs font-bold text-orange-500">Refresh</button></div>
           {userError && <div className="m-4 p-3 rounded-xl bg-red-500/10 text-red-600 text-sm font-semibold">{userError}</div>}
-          {usersLoading ? <div className="p-10 flex justify-center"><Loader2 className="w-6 h-6 animate-spin text-orange-500"/></div> : users.length === 0 ? <div className="p-12 text-center text-sm text-slate-500">No users yet. Add the Restaurant Admin first.</div> : <div className="divide-y divide-slate-200/70 dark:divide-white/5">{users.map(u => <div key={u.id} className="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4"><div className="min-w-0"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-white/5 flex items-center justify-center font-bold text-slate-700 dark:text-white">{u.name?.charAt(0)}</div><div><p className="font-bold text-slate-900 dark:text-white">{u.name}</p><p className="text-xs text-slate-500">{u.email}{u.branch_name ? ` · ${u.branch_name}` : ''}</p></div></div><div className="mt-2 flex gap-2"><span className="px-2 py-1 rounded-lg bg-blue-500/10 text-blue-600 text-[10px] font-bold uppercase">{String(u.role).replace(/_/g,' ')}</span><span className="px-2 py-1 rounded-lg bg-slate-500/10 text-slate-500 text-[10px] font-bold uppercase">{u.status}</span></div></div><div className="flex flex-wrap gap-2">{u.status === 'active' ? <><button onClick={() => userAction(u.id,'suspend')} disabled={!!actionLoading} className="px-3 py-2 rounded-xl bg-amber-500/10 text-amber-700 text-xs font-bold"><UserX className="inline w-3.5 h-3.5 mr-1"/>Suspend</button><button onClick={() => userAction(u.id,'ban')} disabled={!!actionLoading} className="px-3 py-2 rounded-xl bg-red-500/10 text-red-600 text-xs font-bold"><Ban className="inline w-3.5 h-3.5 mr-1"/>Ban</button></> : <button onClick={() => userAction(u.id,'activate')} disabled={!!actionLoading} className="px-3 py-2 rounded-xl bg-emerald-500/10 text-emerald-600 text-xs font-bold"><UserCheck className="inline w-3.5 h-3.5 mr-1"/>Activate</button>}<button onClick={() => deleteUser(u.id)} disabled={!!actionLoading} className="px-3 py-2 rounded-xl bg-red-500/10 text-red-600 text-xs font-bold"><Trash2 className="inline w-3.5 h-3.5 mr-1"/>Delete</button></div></div>)}</div>}
+          {usersLoading ? <div className="p-10 flex justify-center"><Loader2 className="w-6 h-6 animate-spin text-orange-500"/></div> : users.length === 0 ? <div className="p-12 text-center text-sm text-slate-500">No users yet. Add the Restaurant Admin first so devices can be registered.</div> : <div className="divide-y divide-slate-200/70 dark:divide-white/5">{users.map(u => <div key={u.id} className="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4"><div className="min-w-0"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-white/5 flex items-center justify-center font-bold text-slate-700 dark:text-white">{u.name?.charAt(0)}</div><div><p className="font-bold text-slate-900 dark:text-white">{u.name}</p><p className="text-xs text-slate-500">{u.email}{u.branch_name ? ` · ${u.branch_name}` : ''}</p></div></div><div className="mt-2 flex gap-2"><span className="px-2 py-1 rounded-lg bg-blue-500/10 text-blue-600 text-[10px] font-bold uppercase">{String(u.role).replace(/_/g,' ')}</span><span className="px-2 py-1 rounded-lg bg-slate-500/10 text-slate-500 text-[10px] font-bold uppercase">{u.status}</span></div></div><div className="flex flex-wrap gap-2"><button onClick={() => { setResetUser(u); setNewPassword(''); }} disabled={!!actionLoading} className="px-3 py-2 rounded-xl bg-blue-500/10 text-blue-700 text-xs font-bold"><KeyRound className="inline w-3.5 h-3.5 mr-1"/>Reset Password</button>{u.status === 'active' ? <><button onClick={() => userAction(u.id,'suspend')} disabled={!!actionLoading} className="px-3 py-2 rounded-xl bg-amber-500/10 text-amber-700 text-xs font-bold"><UserX className="inline w-3.5 h-3.5 mr-1"/>Suspend</button><button onClick={() => userAction(u.id,'ban')} disabled={!!actionLoading} className="px-3 py-2 rounded-xl bg-red-500/10 text-red-600 text-xs font-bold"><Ban className="inline w-3.5 h-3.5 mr-1"/>Ban</button></> : <button onClick={() => userAction(u.id,'activate')} disabled={!!actionLoading} className="px-3 py-2 rounded-xl bg-emerald-500/10 text-emerald-600 text-xs font-bold"><UserCheck className="inline w-3.5 h-3.5 mr-1"/>Activate</button>}<button onClick={() => deleteUser(u.id)} disabled={!!actionLoading} className="px-3 py-2 rounded-xl bg-red-500/10 text-red-600 text-xs font-bold"><Trash2 className="inline w-3.5 h-3.5 mr-1"/>Delete</button></div></div>)}</div>}
         </section>
       </div>
 
       {showAddUser && <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"><form onSubmit={createUser} className="w-full max-w-lg bg-white dark:bg-[#151517] rounded-3xl p-6 shadow-2xl space-y-4"><div className="flex items-center justify-between"><div><h2 className="text-xl font-black text-slate-900 dark:text-white">Add Restaurant User</h2><p className="text-xs text-slate-500">Create login credentials and assign a role.</p></div><button type="button" onClick={() => setShowAddUser(false)}><X className="w-5 h-5"/></button></div><input required placeholder="Full name" value={form.name} onChange={e=>setForm({...form,name:e.target.value})} className="w-full rounded-xl border p-3 bg-transparent"/><input required type="email" placeholder="Email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} className="w-full rounded-xl border p-3 bg-transparent"/><input placeholder="Phone" value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} className="w-full rounded-xl border p-3 bg-transparent"/><select value={form.role} onChange={e=>setForm({...form,role:e.target.value})} className="w-full rounded-xl border p-3 bg-transparent">{ROLES.map(r=><option key={r.value} value={r.value}>{r.label}</option>)}</select>{branches.length > 0 && <select value={form.assignedBranchId} onChange={e=>setForm({...form,assignedBranchId:e.target.value})} className="w-full rounded-xl border p-3 bg-transparent"><option value="">All / no specific branch</option>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select>}<input required minLength={8} type="password" placeholder="Password (minimum 8 characters)" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} className="w-full rounded-xl border p-3 bg-transparent"/><button disabled={savingUser} className="w-full rounded-xl bg-orange-500 text-white p-3 font-bold flex items-center justify-center gap-2">{savingUser && <Loader2 className="w-4 h-4 animate-spin"/>}{savingUser ? 'Creating…' : 'Create User'}</button></form></div>}
+
+      {resetUser && <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"><form onSubmit={resetPassword} className="w-full max-w-md bg-white dark:bg-[#151517] rounded-3xl p-6 shadow-2xl space-y-4"><div className="flex items-center justify-between"><div><h2 className="text-xl font-black text-slate-900 dark:text-white">Reset Password</h2><p className="text-xs text-slate-500 mt-1">{resetUser.name} · {resetUser.email}</p></div><button type="button" onClick={() => setResetUser(null)}><X className="w-5 h-5"/></button></div><input required minLength={8} type="password" autoFocus placeholder="New password (minimum 8 characters)" value={newPassword} onChange={e=>setNewPassword(e.target.value)} className="w-full rounded-xl border p-3 bg-transparent"/><button disabled={resettingPassword || newPassword.length < 8} className="w-full rounded-xl bg-blue-600 text-white p-3 font-bold flex items-center justify-center gap-2">{resettingPassword && <Loader2 className="w-4 h-4 animate-spin"/>}{resettingPassword ? 'Resetting…' : 'Reset Password'}</button></form></div>}
     </div>
   );
 }
