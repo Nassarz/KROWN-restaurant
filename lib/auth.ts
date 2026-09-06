@@ -2,6 +2,7 @@
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
 import jwt from 'jsonwebtoken';
 import argon2 from 'argon2';
+import { createHash } from 'node:crypto';
 import { getSql, queryWithRetry } from './neon-server';
 
 const configuredSecret = process.env.JWT_SECRET;
@@ -9,6 +10,7 @@ if (!configuredSecret || configuredSecret.length < 32) throw new Error('JWT_SECR
 const JWT_SECRET = new TextEncoder().encode(configuredSecret);
 const JWT_SECRET_STRING = configuredSecret;
 const JWT_EXPIRY_HOURS = Math.max(1, parseInt(process.env.JWT_EXPIRY_HOURS || '24', 10) || 24);
+const SESSION_EXPIRY_MS = JWT_EXPIRY_HOURS * 60 * 60 * 1000;
 const SUPER_ADMIN_ORG = '00000000-0000-0000-0000-000000000000';
 
 export interface TokenPayload extends JWTPayload { sub: string; org: string; role: string; branch: string | null; email: string; }
@@ -17,67 +19,22 @@ export async function verifyPassword(hash: string, password: string): Promise<bo
 export async function createToken(payload: Omit<TokenPayload, 'iat' | 'exp' | 'iss'>): Promise<string> { return new SignJWT(payload as any).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setIssuer('krown-pos').setExpirationTime(`${JWT_EXPIRY_HOURS}h`).sign(JWT_SECRET); }
 export async function verifyToken(token: string): Promise<TokenPayload | null> { try { const { payload } = await jwtVerify(token, JWT_SECRET, { issuer: 'krown-pos', algorithms: ['HS256'] }); return payload as TokenPayload; } catch { return null; } }
 export function verifyTokenSync(token: string): TokenPayload | null { try { const payload = jwt.verify(token, JWT_SECRET_STRING, { issuer: 'krown-pos', algorithms: ['HS256'] }) as jwt.JwtPayload; if (typeof payload.sub !== 'string' || typeof payload.org !== 'string' || typeof payload.role !== 'string' || typeof payload.email !== 'string' || (payload.branch !== null && typeof payload.branch !== 'string')) return null; return payload as TokenPayload; } catch { return null; } }
+function tokenHash(token: string): string { return createHash('sha256').update(token).digest('hex'); }
 
 export interface AuthStaff { id: string; name: string; email: string; role: string; branch: string; assignedBranchId: string | null; assigned_branch_id: string | null; organizationId: string; organization_id: string; status: string; }
 export interface AuthResult { success: boolean; token?: string; staff?: AuthStaff; error?: string; }
-async function staffResult(staff: any, token?: string): Promise<AuthResult> {
-  const branchId = staff.assigned_branch_id || null;
-  return { success: true, token, staff: { id: staff.id, name: staff.name, email: staff.email, role: staff.role, branch: staff.branch || '', assignedBranchId: branchId, assigned_branch_id: branchId, organizationId: staff.organization_id, organization_id: staff.organization_id, status: staff.status || 'active' } };
-}
+async function staffResult(staff: any, token?: string): Promise<AuthResult> { const branchId = staff.assigned_branch_id || null; return { success: true, token, staff: { id: staff.id, name: staff.name, email: staff.email, role: staff.role, branch: staff.branch || '', assignedBranchId: branchId, assigned_branch_id: branchId, organizationId: staff.organization_id, organization_id: staff.organization_id, status: staff.status || 'active' } }; }
 
-export async function authenticateStaff(email: string, password: string): Promise<AuthResult> {
-  const sql = getSql();
-  const rows = await queryWithRetry(() => sql`SELECT id,name,email,role,branch,assigned_branch_id,organization_id,password_argon2,status FROM staff WHERE lower(email)=${email.toLowerCase().trim()} LIMIT 1`);
-  if (!rows.length) return { success: false, error: 'Invalid email or password' };
-  const staff = rows[0] as any;
-  if (staff.status !== 'active' || !staff.password_argon2 || !(await verifyPassword(staff.password_argon2, password))) return { success: false, error: 'Invalid email or password' };
-  return staffResult(staff, await createToken({ sub: staff.id, org: staff.organization_id, role: staff.role, branch: staff.assigned_branch_id, email: staff.email }));
-}
+async function createStaffSession(staff: any, token: string, requestMeta?: { ip?: string | null; userAgent?: string | null; deviceId?: string | null }): Promise<void> { const sql = getSql(); await sql`INSERT INTO staff_sessions (organization_id, staff_id, device_id, token_hash, role, permissions, status, ip_address, user_agent, expires_at, last_active_at) VALUES (${staff.organization_id}, ${staff.id}, ${requestMeta?.deviceId || null}, ${tokenHash(token)}, ${staff.role}, '[]'::jsonb, 'active', ${requestMeta?.ip || null}, ${requestMeta?.userAgent || null}, ${new Date(Date.now() + SESSION_EXPIRY_MS)}, NOW())`; }
+export async function revokeSession(token: string, reason = 'logout'): Promise<void> { const sql = getSql(); await sql`UPDATE staff_sessions SET status='revoked', revoked_at=NOW(), revoked_reason=${reason}, last_active_at=NOW() WHERE token_hash=${tokenHash(token)} AND status='active'`; }
+async function assertSessionActive(token: string, payload: TokenPayload): Promise<boolean> { if (payload.role === 'super_admin' && payload.org === SUPER_ADMIN_ORG) return true; const sql = getSql(); const rows = await sql`SELECT id,status,expires_at,staff_id,organization_id,role FROM staff_sessions WHERE token_hash=${tokenHash(token)} LIMIT 1`; if (!rows.length) return false; const s = rows[0] as any; if (s.status !== 'active' || new Date(s.expires_at).getTime() <= Date.now()) return false; if (s.staff_id !== payload.sub || s.organization_id !== payload.org || s.role !== payload.role) return false; await sql`UPDATE staff_sessions SET last_active_at=NOW() WHERE id=${s.id} AND status='active'`; return true; }
 
-export async function authenticateByPin(email: string, pin: string): Promise<AuthResult> {
-  const sql = getSql();
-  const rows = await sql`SELECT id,name,email,role,branch,assigned_branch_id,organization_id,pin_argon2,status FROM staff WHERE lower(email)=${email.toLowerCase().trim()} LIMIT 1`;
-  if (!rows.length) return { success: false, error: 'Invalid email or PIN' };
-  const staff = rows[0] as any;
-  if (staff.status !== 'active') return { success: false, error: 'Account is not active' };
-  const lockout = await sql`SELECT failed_attempts,locked_until FROM staff_pin_lockouts WHERE staff_id=${staff.id} LIMIT 1`;
-  if (lockout.length) { const lo = lockout[0] as any; const t = lo.locked_until instanceof Date ? lo.locked_until.getTime() : Number(lo.locked_until || 0); if (t > Date.now()) return { success: false, error: `Account locked. Try again in ${Math.ceil((t-Date.now())/60000)} minutes` }; }
-  const valid = !!staff.pin_argon2 && await verifyPassword(staff.pin_argon2, pin);
-  if (!valid) { const attempts = lockout.length ? Number((lockout[0] as any).failed_attempts || 0) + 1 : 1; const until = attempts >= 5 ? new Date(Date.now() + 15*60000) : new Date(0); await sql`INSERT INTO staff_pin_lockouts(staff_id,failed_attempts,locked_until) VALUES(${staff.id},${attempts},${until}) ON CONFLICT(staff_id) DO UPDATE SET failed_attempts=EXCLUDED.failed_attempts,locked_until=EXCLUDED.locked_until`; return { success: false, error: attempts >= 5 ? 'Too many failed attempts. Account locked for 15 minutes' : 'Invalid email or PIN' }; }
-  await sql`DELETE FROM staff_pin_lockouts WHERE staff_id=${staff.id}`;
-  return staffResult(staff, await createToken({ sub: staff.id, org: staff.organization_id, role: staff.role, branch: staff.assigned_branch_id, email: staff.email }));
-}
+export async function authenticateStaff(email: string, password: string): Promise<AuthResult> { const sql = getSql(); const rows = await queryWithRetry(() => sql`SELECT id,name,email,role,branch,assigned_branch_id,organization_id,password_argon2,status FROM staff WHERE lower(email)=${email.toLowerCase().trim()} LIMIT 1`); if (!rows.length) return { success: false, error: 'Invalid email or password' }; const staff = rows[0] as any; if (staff.status !== 'active' || !staff.password_argon2 || !(await verifyPassword(staff.password_argon2, password))) return { success: false, error: 'Invalid email or password' }; const token = await createToken({ sub: staff.id, org: staff.organization_id, role: staff.role, branch: staff.assigned_branch_id, email: staff.email }); await createStaffSession(staff, token); return staffResult(staff, token); }
 
-export async function getSession(token: string): Promise<AuthResult> {
-  const payload = await verifyToken(token); if (!payload?.sub || !payload.org || !payload.role) return { success: false, error: 'Invalid or expired token' };
-  const sql = getSql();
-  if (payload.role === 'super_admin' && payload.org === SUPER_ADMIN_ORG) {
-    const rows = await sql`SELECT id,name,email,is_active FROM super_admins WHERE id=${payload.sub} LIMIT 1`;
-    if (!rows.length || !(rows[0] as any).is_active) return { success: false, error: 'Platform account is inactive' };
-    const admin = rows[0] as any;
-    if (admin.email !== payload.email) return { success: false, error: 'Session identity changed' };
-    return { success: true, staff: { id: admin.id, name: admin.name, email: admin.email, role: 'super_admin', branch: '', assignedBranchId: null, assigned_branch_id: null, organizationId: 'super-admin', organization_id: SUPER_ADMIN_ORG, status: 'active' } };
-  }
-  const rows = await sql`SELECT id,name,email,role,branch,assigned_branch_id,organization_id,status FROM staff WHERE id=${payload.sub} LIMIT 1`;
-  if (!rows.length || (rows[0] as any).status !== 'active') return { success: false, error: 'Staff not found or inactive' };
-  const staff = rows[0] as any;
-  if (staff.organization_id !== payload.org || staff.role !== payload.role || (staff.assigned_branch_id || null) !== (payload.branch || null) || staff.email !== payload.email) return { success: false, error: 'Session is no longer valid' };
-  return staffResult(staff);
-}
+export async function authenticateByPin(email: string, pin: string): Promise<AuthResult> { const sql = getSql(); const rows = await sql`SELECT id,name,email,role,branch,assigned_branch_id,organization_id,pin_argon2,status FROM staff WHERE lower(email)=${email.toLowerCase().trim()} LIMIT 1`; if (!rows.length) return { success: false, error: 'Invalid email or PIN' }; const staff = rows[0] as any; if (staff.status !== 'active') return { success: false, error: 'Account is not active' }; const lockout = await sql`SELECT failed_attempts,locked_until FROM staff_pin_lockouts WHERE staff_id=${staff.id} LIMIT 1`; if (lockout.length) { const lo = lockout[0] as any; const t = lo.locked_until instanceof Date ? lo.locked_until.getTime() : Number(lo.locked_until || 0); if (t > Date.now()) return { success: false, error: `Account locked. Try again in ${Math.ceil((t-Date.now())/60000)} minutes` }; } const valid = !!staff.pin_argon2 && await verifyPassword(staff.pin_argon2, pin); if (!valid) { const attempts = lockout.length ? Number((lockout[0] as any).failed_attempts || 0) + 1 : 1; const until = attempts >= 5 ? new Date(Date.now() + 15*60000) : new Date(0); await sql`INSERT INTO staff_pin_lockouts(staff_id,failed_attempts,locked_until) VALUES(${staff.id},${attempts},${until}) ON CONFLICT(staff_id) DO UPDATE SET failed_attempts=EXCLUDED.failed_attempts,locked_until=EXCLUDED.locked_until`; return { success: false, error: attempts >= 5 ? 'Too many failed attempts. Account locked for 15 minutes' : 'Invalid email or PIN' }; } await sql`DELETE FROM staff_pin_lockouts WHERE staff_id=${staff.id}`; const token = await createToken({ sub: staff.id, org: staff.organization_id, role: staff.role, branch: staff.assigned_branch_id, email: staff.email }); await createStaffSession(staff, token); return staffResult(staff, token); }
 
-export async function authenticateSuperAdmin(email: string, password: string): Promise<AuthResult> {
-  const sql = getSql(); const rows = await sql`SELECT id,name,email,password_hash,is_active FROM super_admins WHERE lower(email)=${email.toLowerCase().trim()} LIMIT 1`;
-  if (!rows.length) return { success: false, error: 'Invalid email or password' }; const admin = rows[0] as any;
-  if (!admin.is_active || !(await verifyPassword(admin.password_hash,password))) return { success: false, error: 'Invalid email or password' };
-  await sql`UPDATE super_admins SET last_login_at=NOW() WHERE id=${admin.id}`;
-  return { success: true, token: await createToken({ sub: admin.id, org: SUPER_ADMIN_ORG, role: 'super_admin', branch: null, email: admin.email }), staff: { id: admin.id, name: admin.name, email: admin.email, role: 'super_admin', branch: '', assignedBranchId: null, assigned_branch_id: null, organizationId: 'super-admin', organization_id: SUPER_ADMIN_ORG, status: 'active' } };
-}
+export async function getSession(token: string): Promise<AuthResult> { const payload = await verifyToken(token); if (!payload?.sub || !payload.org || !payload.role) return { success: false, error: 'Invalid or expired token' }; if (!(await assertSessionActive(token, payload))) return { success: false, error: 'Session revoked or expired' }; const sql = getSql(); if (payload.role === 'super_admin' && payload.org === SUPER_ADMIN_ORG) { const rows = await sql`SELECT id,name,email,is_active FROM super_admins WHERE id=${payload.sub} LIMIT 1`; if (!rows.length || !(rows[0] as any).is_active) return { success: false, error: 'Platform account is inactive' }; const admin = rows[0] as any; if (admin.email !== payload.email) return { success: false, error: 'Session identity changed' }; return { success: true, staff: { id: admin.id, name: admin.name, email: admin.email, role: 'super_admin', branch: '', assignedBranchId: null, assigned_branch_id: null, organizationId: 'super-admin', organization_id: SUPER_ADMIN_ORG, status: 'active' } }; } const rows = await sql`SELECT id,name,email,role,branch,assigned_branch_id,organization_id,status FROM staff WHERE id=${payload.sub} LIMIT 1`; if (!rows.length || (rows[0] as any).status !== 'active') return { success: false, error: 'Staff not found or inactive' }; const staff = rows[0] as any; if (staff.organization_id !== payload.org || staff.role !== payload.role || (staff.assigned_branch_id || null) !== (payload.branch || null) || staff.email !== payload.email) return { success: false, error: 'Session is no longer valid' }; return staffResult(staff); }
 
-export async function getUserFromRequest(request: Request): Promise<TokenPayload | null> {
-  const authorization = request.headers.get('authorization'); const bearer = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]; const cookie = request.headers.get('cookie')?.match(/(?:^|;\s*)krown_session=([^;]+)/)?.[1]; const token = bearer || cookie;
-  if (!token) return null;
-  const payload = await verifyToken(decodeURIComponent(token)); if (!payload) return null;
-  const session = await getSession(decodeURIComponent(token)); if (!session.success || !session.staff) return null;
-  if (session.staff.organizationId === 'super-admin') return { ...payload, org: SUPER_ADMIN_ORG, role: 'super_admin', branch: null, email: session.staff.email };
-  return { ...payload, sub: session.staff.id, org: session.staff.organizationId, role: session.staff.role, branch: session.staff.assignedBranchId, email: session.staff.email };
-}
+export async function authenticateSuperAdmin(email: string, password: string): Promise<AuthResult> { const sql = getSql(); const rows = await sql`SELECT id,name,email,password_hash,is_active FROM super_admins WHERE lower(email)=${email.toLowerCase().trim()} LIMIT 1`; if (!rows.length) return { success: false, error: 'Invalid email or password' }; const admin = rows[0] as any; if (!admin.is_active || !(await verifyPassword(admin.password_hash,password))) return { success: false, error: 'Invalid email or password' }; await sql`UPDATE super_admins SET last_login_at=NOW() WHERE id=${admin.id}`; const token = await createToken({ sub: admin.id, org: SUPER_ADMIN_ORG, role: 'super_admin', branch: null, email: admin.email }); return { success: true, token, staff: { id: admin.id, name: admin.name, email: admin.email, role: 'super_admin', branch: '', assignedBranchId: null, assigned_branch_id: null, organizationId: 'super-admin', organization_id: SUPER_ADMIN_ORG, status: 'active' } }; }
+
+export async function getUserFromRequest(request: Request): Promise<TokenPayload | null> { const authorization = request.headers.get('authorization'); const bearer = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]; const cookie = request.headers.get('cookie')?.match(/(?:^|;\s*)krown_session=([^;]+)/)?.[1]; const token = bearer || cookie; if (!token) return null; const decoded = decodeURIComponent(token); const payload = await verifyToken(decoded); if (!payload) return null; const session = await getSession(decoded); if (!session.success || !session.staff) return null; if (session.staff.organizationId === 'super-admin') return { ...payload, org: SUPER_ADMIN_ORG, role: 'super_admin', branch: null, email: session.staff.email }; return { ...payload, sub: session.staff.id, org: session.staff.organizationId, role: session.staff.role, branch: session.staff.assignedBranchId, email: session.staff.email }; }
