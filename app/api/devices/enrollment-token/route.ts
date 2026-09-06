@@ -11,9 +11,7 @@ const ALLOWED_ROLES = new Set([
   'branch_manager', 'manager', 'restaurant_admin', 'admin', 'super_admin',
 ]);
 
-function activationPin() {
-  return String(randomInt(10_000_000, 100_000_000));
-}
+function activationPin() { return String(randomInt(10_000_000, 100_000_000)); }
 
 export async function POST(request: NextRequest) {
   try {
@@ -22,12 +20,26 @@ export async function POST(request: NextRequest) {
     if (!hasPermission(ctx.role, 'devices:create')) return NextResponse.json({ data: null, error: 'Insufficient permissions' }, { status: 403 });
 
     const body = await request.json();
-    const branchId = String(body.branchId || ctx.branchId || '').trim();
-    const deviceType = String(body.deviceType || '').trim();
+    const requestedOrganizationId = String(body.organizationId || '').trim();
+    let branchId = String(body.branchId || ctx.branchId || '').trim();
+    const deviceTypeRaw = String(body.deviceType || '').trim();
+    const deviceType = deviceTypeRaw === 'kitchen_display' ? 'kitchen' : deviceTypeRaw;
     const deviceName = String(body.deviceName || '').trim();
     const allowedRoles = Array.isArray(body.allowedRoles)
-      ? body.allowedRoles.map((r: unknown) => String(r).trim()).filter((r: string) => ALLOWED_ROLES.has(r)).slice(0, 20)
+      ? body.allowedRoles.map((r: unknown) => String(r).trim().toLowerCase()).filter((r: string) => ALLOWED_ROLES.has(r)).slice(0, 20)
       : [];
+
+    if (!branchId && ctx.isSuperAdmin && requestedOrganizationId) {
+      const sql = getSql();
+      const firstBranch = await sql`
+        SELECT id FROM branches
+        WHERE organization_id=${requestedOrganizationId}
+          AND (status IS NULL OR status NOT IN ('deleted'))
+        ORDER BY created_at ASC
+        LIMIT 1
+      `;
+      branchId = String(firstBranch[0]?.id || '');
+    }
 
     if (!branchId || !deviceType || !deviceName) return NextResponse.json({ data: null, error: 'Restaurant branch, device type and device name are required' }, { status: 400 });
     if (!ALLOWED_DEVICE_TYPES.has(deviceType)) return NextResponse.json({ data: null, error: 'Unsupported device type' }, { status: 400 });
@@ -42,8 +54,6 @@ export async function POST(request: NextRequest) {
     }
 
     const organizationId = (branch[0] as any).organization_id;
-    // The activation PIN is the one-time enrollment secret. Only its SHA-256
-    // digest is stored in Neon. It expires after 10 minutes and is atomically consumed.
     const token = activationPin();
     const tokenHash = createHash('sha256').update(token).digest('hex');
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
