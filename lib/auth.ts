@@ -6,19 +6,19 @@ import { createHash } from 'node:crypto';
 import { getSql, queryWithRetry } from './neon-server';
 
 const configuredSecret = process.env.JWT_SECRET;
-if (!configuredSecret || configuredSecret.length < 32) throw new Error('JWT_SECRET must be configured and at least 32 characters long.');
-const JWT_SECRET = new TextEncoder().encode(configuredSecret);
-const JWT_SECRET_STRING = configuredSecret;
 const JWT_EXPIRY_HOURS = Math.max(1, parseInt(process.env.JWT_EXPIRY_HOURS || '24', 10) || 24);
 const SESSION_EXPIRY_MS = JWT_EXPIRY_HOURS * 60 * 60 * 1000;
 const SUPER_ADMIN_ORG = '00000000-0000-0000-0000-000000000000';
 
+function getJwtSecretBytes(): Uint8Array { if (!configuredSecret || configuredSecret.length < 32) throw new Error('JWT_SECRET must be configured and at least 32 characters long.'); return new TextEncoder().encode(configuredSecret); }
+function getJwtSecretString(): string { if (!configuredSecret || configuredSecret.length < 32) throw new Error('JWT_SECRET must be configured and at least 32 characters long.'); return configuredSecret; }
+
 export interface TokenPayload extends JWTPayload { sub: string; org: string; role: string; branch: string | null; email: string; }
 export async function hashPassword(password: string): Promise<string> { return argon2.hash(password, { type: argon2.argon2id, memoryCost: 65536, timeCost: 3, parallelism: 4 }); }
 export async function verifyPassword(hash: string, password: string): Promise<boolean> { try { return await argon2.verify(hash, password); } catch { return false; } }
-export async function createToken(payload: Omit<TokenPayload, 'iat' | 'exp' | 'iss'>): Promise<string> { return new SignJWT(payload as any).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setIssuer('krown-pos').setExpirationTime(`${JWT_EXPIRY_HOURS}h`).sign(JWT_SECRET); }
-export async function verifyToken(token: string): Promise<TokenPayload | null> { try { const { payload } = await jwtVerify(token, JWT_SECRET, { issuer: 'krown-pos', algorithms: ['HS256'] }); return payload as TokenPayload; } catch { return null; } }
-export function verifyTokenSync(token: string): TokenPayload | null { try { const payload = jwt.verify(token, JWT_SECRET_STRING, { issuer: 'krown-pos', algorithms: ['HS256'] }) as jwt.JwtPayload; if (typeof payload.sub !== 'string' || typeof payload.org !== 'string' || typeof payload.role !== 'string' || typeof payload.email !== 'string' || (payload.branch !== null && typeof payload.branch !== 'string')) return null; return payload as TokenPayload; } catch { return null; } }
+export async function createToken(payload: Omit<TokenPayload, 'iat' | 'exp' | 'iss'>): Promise<string> { return new SignJWT(payload as any).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setIssuer('krown-pos').setExpirationTime(`${JWT_EXPIRY_HOURS}h`).sign(getJwtSecretBytes()); }
+export async function verifyToken(token: string): Promise<TokenPayload | null> { try { const { payload } = await jwtVerify(token, getJwtSecretBytes(), { issuer: 'krown-pos', algorithms: ['HS256'] }); return payload as TokenPayload; } catch { return null; } }
+export function verifyTokenSync(token: string): TokenPayload | null { try { const payload = jwt.verify(token, getJwtSecretString(), { issuer: 'krown-pos', algorithms: ['HS256'] }) as jwt.JwtPayload; if (typeof payload.sub !== 'string' || typeof payload.org !== 'string' || typeof payload.role !== 'string' || typeof payload.email !== 'string' || (payload.branch !== null && typeof payload.branch !== 'string')) return null; return payload as TokenPayload; } catch { return null; } }
 function tokenHash(token: string): string { return createHash('sha256').update(token).digest('hex'); }
 
 export interface AuthStaff { id: string; name: string; email: string; role: string; branch: string; assignedBranchId: string | null; assigned_branch_id: string | null; organizationId: string; organization_id: string; status: string; }
