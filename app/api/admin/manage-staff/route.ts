@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSql } from '@/lib/neon-server';
-import { extractTenantContext } from '@/lib/tenant';
+import { extractVerifiedTenantContext } from '@/lib/tenant';
 import { hashPassword } from '@/lib/auth';
 import { hasPermission, canManageRole, normalizeRole, isPlatformRole } from '@/lib/rbac';
 import { logAudit } from '@/lib/audit';
+import { assertBranchAccess } from '@/lib/access-control';
 
 function forbidden(message: string) { return NextResponse.json({ success: false, error: { code: 'FORBIDDEN', message } }, { status: 403 }); }
 
 export async function POST(req: NextRequest) {
-  const ctx = extractTenantContext(req);
+  const ctx = await extractVerifiedTenantContext(req);
   if (!ctx) return NextResponse.json({ success: false, error: { code: 'AUTH_REQUIRED', message: 'Unauthorized' } }, { status: 401 });
 
   try {
@@ -21,9 +22,9 @@ export async function POST(req: NextRequest) {
     if (!rows.length) return NextResponse.json({ success: false, error: { code: 'NOT_FOUND', message: 'Staff member not found' } }, { status: 404 });
     const target = rows[0] as any;
 
-    // Branch-scoped managers may only manage staff assigned to their own branch.
-    if (!isPlatformRole(ctx.role) && normalizeRole(ctx.role) !== 'restaurant_admin' && target.assigned_branch_id !== ctx.branchId) {
-      return forbidden('You cannot manage staff from another branch');
+    if (!isPlatformRole(ctx.role) && normalizeRole(ctx.role) !== 'restaurant_admin') {
+      if (!ctx.branchId || target.assigned_branch_id !== ctx.branchId) return forbidden('You cannot manage staff from another branch');
+      await assertBranchAccess(ctx, target.assigned_branch_id);
     }
 
     if (action === 'delete') {
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
 
     if (action === 'reset_password') {
       if (!hasPermission(ctx.role, 'staff:reset_password')) return forbidden('You do not have permission to reset passwords');
-      if (typeof password !== 'string' || password.length < 6) return NextResponse.json({ success: false, error: { code: 'INVALID_INPUT', message: 'Password must be at least 6 characters' } }, { status: 400 });
+      if (typeof password !== 'string' || password.length < 8) return NextResponse.json({ success: false, error: { code: 'INVALID_INPUT', message: 'Password must be at least 8 characters' } }, { status: 400 });
       const hashedPassword = await hashPassword(password);
       await sql`UPDATE staff SET password_argon2=${hashedPassword}, password_hash=NULL, updated_at=NOW() WHERE id=${staffId} AND organization_id=${ctx.organizationId}`;
       if (pin !== undefined) {
@@ -65,9 +66,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, data: { updated: true, role: normalized } });
     }
 
-    if (action === 'promote_admin') {
-      return forbidden('Super Admin promotion is disabled for tenant staff');
-    }
+    if (action === 'promote_admin') return forbidden('Super Admin promotion is disabled for tenant staff');
 
     return NextResponse.json({ success: false, error: { code: 'UNKNOWN_ACTION', message: `Unknown action: ${action}` } }, { status: 400 });
   } catch (err: unknown) {
