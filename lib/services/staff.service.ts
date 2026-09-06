@@ -33,10 +33,23 @@ const ROLE_HIERARCHY: Record<string, number> = {
   senior_waiter: 2,
 };
 
-const SAFE_STAFF_COLUMNS = `id, organization_id, name, email, phone, id_type, id_number, role, assigned_branch_id, status, avatar, created_at, updated_at`;
+const STAFF_SELECT = `id, organization_id, name, email, phone, id_type, id_number, role, assigned_branch_id, status, avatar, created_at, updated_at`;
 
 export async function listStaff(ctx: TenantContext, branchId?: string): Promise<Staff[]> {
   const sql = getSql();
+
+  // Super Admin is a platform-level identity. Its JWT uses the platform
+  // organization UUID, so tenant-scoped queries would incorrectly return 0
+  // staff. Platform reads must therefore query across all organizations.
+  if (ctx.isSuperAdmin) {
+    if (branchId && branchId !== 'all') {
+      const rows = await sql`SELECT id, organization_id, name, email, phone, id_type, id_number, role, assigned_branch_id, status, avatar, created_at, updated_at FROM staff WHERE assigned_branch_id = ${branchId} ORDER BY name ASC`;
+      return rows as Staff[];
+    }
+    const rows = await sql`SELECT id, organization_id, name, email, phone, id_type, id_number, role, assigned_branch_id, status, avatar, created_at, updated_at FROM staff ORDER BY name ASC`;
+    return rows as Staff[];
+  }
+
   await setTenantContext(sql, ctx.organizationId);
   const effectiveBranch = branchId || ctx.branchId || undefined;
   let rows;
@@ -50,8 +63,10 @@ export async function listStaff(ctx: TenantContext, branchId?: string): Promise<
 
 export async function getStaff(ctx: TenantContext, staffId: string): Promise<Staff | null> {
   const sql = getSql();
-  await setTenantContext(sql, ctx.organizationId);
-  const rows = await sql`SELECT id, organization_id, name, email, phone, id_type, id_number, role, assigned_branch_id, status, avatar, created_at, updated_at FROM staff WHERE id = ${staffId} AND organization_id = ${ctx.organizationId}`;
+  if (!ctx.isSuperAdmin) await setTenantContext(sql, ctx.organizationId);
+  const rows = ctx.isSuperAdmin
+    ? await sql`SELECT ${sql.unsafe(STAFF_SELECT)} FROM staff WHERE id = ${staffId}`
+    : await sql`SELECT id, organization_id, name, email, phone, id_type, id_number, role, assigned_branch_id, status, avatar, created_at, updated_at FROM staff WHERE id = ${staffId} AND organization_id = ${ctx.organizationId}`;
   return rows.length > 0 ? (rows[0] as Staff) : null;
 }
 
