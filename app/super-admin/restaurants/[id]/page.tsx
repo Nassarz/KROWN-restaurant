@@ -61,6 +61,9 @@ export default function RestaurantDetailPage() {
   useEffect(() => {
     const t = token();
     if (!t) { router.replace('/'); return; }
+    // This effect intentionally starts the initial data synchronization.
+    // The async loader owns the resulting state updates after the external fetches complete.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadRestaurant();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgId, router]);
