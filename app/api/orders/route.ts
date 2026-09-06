@@ -35,8 +35,6 @@ export async function POST(request: NextRequest) {
     const items = (body.items || []).map((item: any) => ({ productId: item.productId || item.product_id, quantity: Number(item.quantity || 1), notes: item.notes, addOns: item.addOns || item.add_ons }));
     if (!items.length) return NextResponse.json({ error: 'At least one order item is required' }, { status: 400 });
     if (items.some((item: any) => !item.productId || !Number.isFinite(item.quantity) || item.quantity <= 0)) return NextResponse.json({ error: 'Invalid order item' }, { status: 400 });
-    const idempotencyKey = String(body.idempotencyKey || body.idempotency_key || request.headers.get('Idempotency-Key') || '').trim();
-    if (!idempotencyKey || idempotencyKey.length > 128) return NextResponse.json({ error: 'A valid idempotency key is required' }, { status: 400 });
 
     const order = await createOrder(ctx, {
       branchId,
@@ -47,12 +45,11 @@ export async function POST(request: NextRequest) {
       companyName: body.companyName || body.company_name,
       tin: body.tin,
       companyId: body.companyId || body.company_id,
-      idempotencyKey,
     });
     return NextResponse.json({ data: order }, { status: 201 });
   } catch (error: any) {
     const message = error?.message || 'Failed to create order';
-    const status = /Forbidden/i.test(message) ? 403 : /idempotency|invalid order|branch|required/i.test(message) ? 400 : 500;
+    const status = /Forbidden/i.test(message) ? 403 : /invalid order|branch|required/i.test(message) ? 400 : 500;
     return NextResponse.json({ error: message }, { status });
   }
 }
