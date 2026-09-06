@@ -15,11 +15,10 @@ export default function SuperAdminRootPage() {
       router.replace('/');
       return;
     }
-    // Validate session with API
     fetch('/api/auth/session', { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json())
       .then(json => {
-        if (json?.session?.user) {
+        if (json?.session?.user?.role === 'super_admin') {
           setUser(json.session.user);
           setReady(true);
         } else {
@@ -41,5 +40,16 @@ export default function SuperAdminRootPage() {
     if (v === 'admin') router.push('/');
   };
 
-  return <SuperAdminPage user={user} setView={handleSetView as any} activeStaff={user} initialTab="dashboard" />;
+  return (
+    <>
+      <SuperAdminPage user={user} setView={handleSetView as any} activeStaff={user} initialTab="dashboard" />
+      <button
+        type="button"
+        onClick={() => router.push('/super-admin/onboard')}
+        className="fixed bottom-6 right-6 z-[60] rounded-2xl bg-orange-500 px-5 py-3 text-sm font-black text-white shadow-2xl shadow-orange-500/30 hover:bg-orange-600 active:scale-95 transition-all"
+      >
+        + Onboard Restaurant
+      </button>
+    </>
+  );
 }
