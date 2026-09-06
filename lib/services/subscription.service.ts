@@ -1,6 +1,10 @@
-import { getSql } from '@/lib/neon-server';
 import type { TenantContext } from '@/lib/tenant';
-import { setTenantContext } from '@/lib/tenant';
+
+/**
+ * KROWN Restaurant is currently an unlimited-access platform.
+ * Subscription records are intentionally not required for tenant access.
+ * These interfaces remain for backwards compatibility with older API callers.
+ */
 
 export interface SubscriptionPlan {
   id: string;
@@ -43,125 +47,50 @@ export interface UsageCounts {
   orders_today: number;
 }
 
+/** No plans are offered because KROWN access is unlimited. */
 export async function getPlans(): Promise<SubscriptionPlan[]> {
-  const sql = getSql();
-
-  const rows = await sql`
-    SELECT * FROM subscription_plans
-    WHERE is_active = true
-    ORDER BY monthly_price_ugx ASC
-  ` as SubscriptionPlan[];
-  return rows;
+  return [];
 }
 
-export async function getOrgSubscription(ctx: TenantContext): Promise<OrgSubscription | null> {
-  const sql = getSql();
-  await setTenantContext(sql, ctx.organizationId);
-
-  const rows = await sql`
-    SELECT ts.*, sp.name as plan_name, sp.display_name as plan_display_name,
-           sp.max_branches, sp.max_staff, sp.max_menu_items,
-           sp.max_orders_per_day, sp.features
-    FROM tenant_subscriptions ts
-    JOIN subscription_plans sp ON ts.plan_id = sp.id
-    WHERE ts.organization_id = ${ctx.organizationId}
-      AND ts.status = 'active'
-    LIMIT 1
-  ` as OrgSubscription[];
-  return rows.length > 0 ? rows[0] : null;
+/** Tenants do not require a subscription to operate. */
+export async function getOrgSubscription(_ctx: TenantContext): Promise<OrgSubscription | null> {
+  return null;
 }
 
+/** Subscription changes are intentionally disabled. */
 export async function updateSubscription(
-  ctx: TenantContext,
-  planId: string
+  _ctx: TenantContext,
+  _planId: string
 ): Promise<OrgSubscription | null> {
-  const sql = getSql();
-  await setTenantContext(sql, ctx.organizationId);
-
-  // Deactivate current subscription
-  await sql`
-    UPDATE tenant_subscriptions
-    SET status = 'inactive'
-    WHERE organization_id = ${ctx.organizationId}
-      AND status = 'active'
-  `;
-
-  // Create new subscription
-  const now = new Date();
-  const periodEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-
-  await sql`
-    INSERT INTO tenant_subscriptions (
-      organization_id, plan_id, status, started_at,
-      current_period_start, current_period_end
-    )
-    VALUES (
-      ${ctx.organizationId},
-      ${planId},
-      'active',
-      ${now},
-      ${now},
-      ${periodEnd}
-    )
-  `;
-
-  return getOrgSubscription(ctx);
+  throw new Error('Subscriptions are disabled. KROWN Restaurant access is unlimited.');
 }
 
+/**
+ * Every tenant resource is unlimited. Keep this API so existing callers remain
+ * compatible while removing all subscription-based caps.
+ */
 export async function checkLimit(
-  ctx: TenantContext,
-  resource: 'branches' | 'staff' | 'menu_items' | 'orders',
+  _ctx: TenantContext,
+  _resource: 'branches' | 'staff' | 'menu_items' | 'orders',
   currentCount: number
 ): Promise<{ allowed: boolean; limit: number; current: number }> {
-  const sql = getSql();
-  await setTenantContext(sql, ctx.organizationId);
-
-  // Get subscription limits
-  const sub = await getOrgSubscription(ctx);
-
-  const defaultLimits: Record<string, number> = {
-    branches: 1,
-    staff: 10,
-    menu_items: 50,
-    orders: 200,
-  };
-
-  const limitMap: Record<string, string> = {
-    branches: 'max_branches',
-    staff: 'max_staff',
-    menu_items: 'max_menu_items',
-    orders: 'max_orders_per_day',
-  };
-
-  let limit: number;
-  if (sub) {
-    const col = limitMap[resource];
-    limit = (sub as any)[col] ?? defaultLimits[resource];
-  } else {
-    limit = defaultLimits[resource];
-  }
-
   return {
-    allowed: currentCount < limit,
-    limit,
+    allowed: true,
+    limit: Number.POSITIVE_INFINITY,
     current: currentCount,
   };
 }
 
+/** Usage is still reported for operational analytics, not billing. */
 export async function getUsage(ctx: TenantContext): Promise<UsageCounts> {
+  const { getSql } = await import('@/lib/neon-server');
   const sql = getSql();
-  await setTenantContext(sql, ctx.organizationId);
 
   const [branches, staff, menuItems, ordersToday] = await Promise.all([
     sql`SELECT COUNT(*)::int as count FROM branches WHERE organization_id = ${ctx.organizationId}`,
     sql`SELECT COUNT(*)::int as count FROM staff WHERE organization_id = ${ctx.organizationId} AND role != 'super_admin'`,
     sql`SELECT COUNT(*)::int as count FROM products WHERE organization_id = ${ctx.organizationId}`,
-    sql`
-      SELECT COUNT(*)::int as count FROM orders
-      WHERE organization_id = ${ctx.organizationId}
-        AND created_at >= CURRENT_DATE
-        AND created_at < CURRENT_DATE + INTERVAL '1 day'
-    `,
+    sql`SELECT COUNT(*)::int as count FROM orders WHERE organization_id = ${ctx.organizationId} AND created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + INTERVAL '1 day'`,
   ]) as { count: number }[][];
 
   return {
