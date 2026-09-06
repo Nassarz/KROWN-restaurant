@@ -1,5 +1,6 @@
+import { timingSafeEqual } from 'node:crypto';
 import { getSql } from '@/lib/neon-server';
-import { createToken, verifyPassword, type AuthResult } from '@/lib/auth';
+import { createToken, hashPassword, verifyPassword, type AuthResult } from '@/lib/auth';
 
 const ADMIN_ROLES = new Set(['super_admin', 'restaurant_admin', 'admin']);
 
@@ -47,13 +48,21 @@ async function createSession(staff: any, deviceId: string | null) {
   return { token, staff: staffPayload(staff) };
 }
 
+function safeLegacyPinMatch(stored: unknown, supplied: string): boolean {
+  if (typeof stored !== 'string' || !/^\d{4,6}$/.test(stored)) return false;
+  const a = Buffer.from(stored, 'utf8');
+  const b = Buffer.from(supplied, 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 /**
  * PIN-first authentication. No username/email is required at the POS.
  * Device-bound staff are narrowed to the enrolled device's restaurant/branch.
  * Admin roles are deliberately device-independent.
  *
- * If the same PIN exists on more than one eligible account, authentication is
- * refused rather than guessing which employee intended to sign in.
+ * Existing installations may still have a legacy numeric pin_code. A
+ * successful legacy PIN login is immediately upgraded to Argon2id so the
+ * plaintext value is no longer needed for subsequent logins.
  */
 export async function authenticateByPinOnly(
   pin: string,
@@ -83,26 +92,24 @@ export async function authenticateByPinOnly(
       : [];
 
     candidates = await sql`
-      SELECT id,name,email,role,branch,assigned_branch_id,organization_id,pin_argon2,status
+      SELECT id,name,email,role,branch,assigned_branch_id,organization_id,pin_argon2,pin_code,status
       FROM staff
       WHERE organization_id=${deviceContext.organizationId}
         AND assigned_branch_id=${deviceContext.branchId}
         AND status='active'
-        AND pin_argon2 IS NOT NULL
       ORDER BY id
     `;
 
-    if (allowedRoles.length) {
-      candidates = candidates.filter((staff: any) => allowedRoles.includes(String(staff.role || '').trim().toLowerCase()));
-    }
-
-    candidates = candidates.filter((staff: any) => !ADMIN_ROLES.has(String(staff.role || '').trim().toLowerCase()));
+    candidates = candidates.filter((staff: any) => {
+      const role = String(staff.role || '').trim().toLowerCase();
+      if (ADMIN_ROLES.has(role)) return false;
+      return !allowedRoles.length || allowedRoles.includes(role);
+    });
   } else {
     candidates = await sql`
-      SELECT id,name,email,role,branch,assigned_branch_id,organization_id,pin_argon2,status
+      SELECT id,name,email,role,branch,assigned_branch_id,organization_id,pin_argon2,pin_code,status
       FROM staff
       WHERE status='active'
-        AND pin_argon2 IS NOT NULL
       ORDER BY id
     `;
     candidates = candidates.filter((staff: any) => ADMIN_ROLES.has(String(staff.role || '').trim().toLowerCase()));
@@ -110,7 +117,17 @@ export async function authenticateByPinOnly(
 
   const matches: any[] = [];
   for (const staff of candidates as any[]) {
-    if (await verifyPassword(staff.pin_argon2, cleanPin)) matches.push(staff);
+    let valid = false;
+    if (typeof staff.pin_argon2 === 'string' && staff.pin_argon2) {
+      valid = await verifyPassword(staff.pin_argon2, cleanPin);
+    }
+    if (!valid && safeLegacyPinMatch(staff.pin_code, cleanPin)) {
+      valid = true;
+      // Upgrade the legacy numeric PIN to a strong Argon2id hash immediately.
+      const upgradedHash = await hashPassword(cleanPin);
+      await sql`UPDATE staff SET pin_argon2=${upgradedHash} WHERE id=${staff.id} AND pin_argon2 IS NULL`;
+    }
+    if (valid) matches.push(staff);
     if (matches.length > 1) break;
   }
 
