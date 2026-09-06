@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { extractTenantContext } from '@/lib/tenant';
+import { extractVerifiedTenantContext } from '@/lib/tenant';
 import { updateRole } from '@/lib/services/staff.service';
 import { canManageStaff } from '@/lib/rbac';
 import { getUserFromRequest } from '@/lib/auth';
@@ -9,12 +9,12 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const ctx = extractTenantContext(request);
+    const ctx = await extractVerifiedTenantContext(request);
     if (!ctx) {
       return NextResponse.json({ data: null, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const user = getUserFromRequest(request);
+    const user = await getUserFromRequest(request);
     if (!user) {
       return NextResponse.json({ data: null, error: 'Unauthorized' }, { status: 401 });
     }
