@@ -3,7 +3,6 @@ import { Inter } from 'next/font/google';
 import './globals.css';
 import { OfflineSyncBanner } from '@/components/offline-sync-banner';
 import { KrownAuthOverlay } from '@/components/krown-auth-overlay';
-import { KrownDeviceCenterOverlay } from '@/components/krown-device-center-overlay';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
 
@@ -41,7 +40,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <OfflineSyncBanner />
         {children}
         <KrownAuthOverlay />
-        <KrownDeviceCenterOverlay />
         <script
           dangerouslySetInnerHTML={{
             __html: `
