@@ -1,0 +1,9 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Next.js is handled by Netlify's current OpenNext adapter.
+# Do not add a root-level /* -> / rewrite: it would override Next.js routing.
