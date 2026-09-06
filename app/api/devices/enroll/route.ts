@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
       RETURNING organization_id, branch_id, device_type, device_name, allowed_roles, created_by
     ), inserted AS (
       INSERT INTO devices (id, organization_id, branch_id, public_reference, device_fingerprint, device_name, device_type, status, trust_status, credential_id, credential_public_key, credential_version, enrolled_at, enrolled_by, browser, operating_system, ip_address, user_agent, allowed_roles, created_at, updated_at)
-      SELECT ${deviceId}, c.organization_id, c.branch_id, ${publicReference}, ${deviceFingerprint}, c.device_name, c.device_type, 'active', 'active', ${credentialId}, ${credentialPublicKey}, 1, NOW(), c.created_by, ${browser}, ${operatingSystem}, ${ipAddress}, ${userAgent}, COALESCE(c.allowed_roles,'[]'::jsonb), NOW(), NOW()
+      SELECT ${deviceId}, c.organization_id, c.branch_id, ${publicReference}, ${deviceFingerprint}, c.device_name, c.device_type, 'active', 'trusted', ${credentialId}, ${credentialPublicKey}, 1, NOW(), c.created_by, ${browser}, ${operatingSystem}, ${ipAddress}, ${userAgent}, COALESCE(c.allowed_roles,'[]'::jsonb), NOW(), NOW()
       FROM claimed c
       RETURNING id, organization_id, branch_id, public_reference, device_name, device_type, status, trust_status, credential_id, credential_version, enrolled_at, created_at
     ) SELECT * FROM inserted`;
