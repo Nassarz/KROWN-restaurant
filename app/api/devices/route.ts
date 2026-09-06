@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { extractVerifiedTenantContext } from '@/lib/tenant';
+import { extractVerifiedTenantContext, setTenantContext } from '@/lib/tenant';
+import { getSql } from '@/lib/neon-server';
 import { listDevices, registerDevice } from '@/lib/services/device.service';
 import { hasPermission } from '@/lib/rbac';
 
@@ -27,8 +28,16 @@ export async function POST(request: NextRequest) {
     const { deviceFingerprint, deviceName, deviceType, branchId, browser, operatingSystem, ipAddress, userAgent, allowedRoles } = body;
     if (!deviceFingerprint || !deviceName || !deviceType || !branchId) return NextResponse.json({ data: null, error: 'deviceFingerprint, deviceName, deviceType, and branchId are required' }, { status: 400 });
     if (!ctx.isSuperAdmin && ctx.role !== 'restaurant_admin' && ctx.branchId !== branchId) return NextResponse.json({ data:null, error:'Device must belong to your assigned branch' }, { status:403 });
-    const device = await registerDevice(ctx, { deviceFingerprint, deviceName, deviceType, branchId, browser, operatingSystem, ipAddress, userAgent, allowedRoles });
-    return NextResponse.json({ data: device }, { status: 201 });
+
+    const sql = getSql();
+    await setTenantContext(sql, ctx.organizationId);
+    const branchRows = await sql`SELECT id FROM branches WHERE id=${branchId} AND organization_id=${ctx.organizationId} LIMIT 1`;
+    if (!branchRows.length) return NextResponse.json({ data:null, error:'Branch not found' }, { status:404 });
+
+    const device = await registerDevice(ctx, { deviceFingerprint, deviceName, deviceType, browser, operatingSystem, ipAddress, userAgent, allowedRoles });
+    await sql`UPDATE devices SET branch_id=${branchId}, updated_at=NOW() WHERE id=${device.id} AND organization_id=${ctx.organizationId}`;
+    const updated = await sql`SELECT * FROM devices WHERE id=${device.id} AND organization_id=${ctx.organizationId} LIMIT 1`;
+    return NextResponse.json({ data: updated[0] }, { status: 201 });
   } catch (e: any) {
     return NextResponse.json({ data: null, error: e.message || 'Internal server error' }, { status: 500 });
   }
