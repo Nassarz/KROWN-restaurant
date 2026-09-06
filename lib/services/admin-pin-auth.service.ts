@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { getSql } from '@/lib/neon-server';
 import { createToken, verifyPassword, type AuthResult } from '@/lib/auth';
 
@@ -75,7 +76,7 @@ export async function authenticateAdminByPin(email: string, pin: string): Promis
       (organization_id,staff_id,device_id,token_hash,role,permissions,status,expires_at,last_active_at)
     VALUES
       (${staff.organization_id},${staff.id},NULL,
-       encode(sha256(convert_to(${token}, 'UTF8')),'hex'),
+       ${createHash('sha256').update(token).digest('hex')},
        ${staff.role},'[]'::jsonb,'active',
        ${new Date(Date.now() + 24 * 60 * 60 * 1000)},NOW())
   `;
