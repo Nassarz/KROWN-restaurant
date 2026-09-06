@@ -33,14 +33,9 @@ const ROLE_HIERARCHY: Record<string, number> = {
   senior_waiter: 2,
 };
 
-const STAFF_SELECT = `id, organization_id, name, email, phone, id_type, id_number, role, assigned_branch_id, status, avatar, created_at, updated_at`;
-
 export async function listStaff(ctx: TenantContext, branchId?: string): Promise<Staff[]> {
   const sql = getSql();
 
-  // Super Admin is a platform-level identity. Its JWT uses the platform
-  // organization UUID, so tenant-scoped queries would incorrectly return 0
-  // staff. Platform reads must therefore query across all organizations.
   if (ctx.isSuperAdmin) {
     if (branchId && branchId !== 'all') {
       const rows = await sql`SELECT id, organization_id, name, email, phone, id_type, id_number, role, assigned_branch_id, status, avatar, created_at, updated_at FROM staff WHERE assigned_branch_id = ${branchId} ORDER BY name ASC`;
@@ -52,12 +47,11 @@ export async function listStaff(ctx: TenantContext, branchId?: string): Promise<
 
   await setTenantContext(sql, ctx.organizationId);
   const effectiveBranch = branchId || ctx.branchId || undefined;
-  let rows;
   if (effectiveBranch) {
-    rows = await sql`SELECT id, organization_id, name, email, phone, id_type, id_number, role, assigned_branch_id, status, avatar, created_at, updated_at FROM staff WHERE organization_id = ${ctx.organizationId} AND assigned_branch_id = ${effectiveBranch} AND role != 'super_admin' ORDER BY name ASC`;
-  } else {
-    rows = await sql`SELECT id, organization_id, name, email, phone, id_type, id_number, role, assigned_branch_id, status, avatar, created_at, updated_at FROM staff WHERE organization_id = ${ctx.organizationId} AND role != 'super_admin' ORDER BY name ASC`;
+    const rows = await sql`SELECT id, organization_id, name, email, phone, id_type, id_number, role, assigned_branch_id, status, avatar, created_at, updated_at FROM staff WHERE organization_id = ${ctx.organizationId} AND assigned_branch_id = ${effectiveBranch} AND role != 'super_admin' ORDER BY name ASC`;
+    return rows as Staff[];
   }
+  const rows = await sql`SELECT id, organization_id, name, email, phone, id_type, id_number, role, assigned_branch_id, status, avatar, created_at, updated_at FROM staff WHERE organization_id = ${ctx.organizationId} AND role != 'super_admin' ORDER BY name ASC`;
   return rows as Staff[];
 }
 
@@ -65,7 +59,7 @@ export async function getStaff(ctx: TenantContext, staffId: string): Promise<Sta
   const sql = getSql();
   if (!ctx.isSuperAdmin) await setTenantContext(sql, ctx.organizationId);
   const rows = ctx.isSuperAdmin
-    ? await sql`SELECT ${sql.unsafe(STAFF_SELECT)} FROM staff WHERE id = ${staffId}`
+    ? await sql`SELECT id, organization_id, name, email, phone, id_type, id_number, role, assigned_branch_id, status, avatar, created_at, updated_at FROM staff WHERE id = ${staffId}`
     : await sql`SELECT id, organization_id, name, email, phone, id_type, id_number, role, assigned_branch_id, status, avatar, created_at, updated_at FROM staff WHERE id = ${staffId} AND organization_id = ${ctx.organizationId}`;
   return rows.length > 0 ? (rows[0] as Staff) : null;
 }
@@ -73,7 +67,6 @@ export async function getStaff(ctx: TenantContext, staffId: string): Promise<Sta
 export async function createStaff(ctx: TenantContext, input: { name: string; email: string; phone?: string; pin?: string; password?: string; idType?: string; idNumber?: string; role: string; branchId?: string; avatar?: string; }): Promise<Staff> {
   const sql = getSql();
   await setTenantContext(sql, ctx.organizationId);
-
   const countRows = await sql`SELECT COUNT(*)::int as count FROM staff WHERE organization_id = ${ctx.organizationId}`;
   const currentCount = (countRows[0] as any).count;
   const limitCheck = await checkSubscriptionLimit(ctx.organizationId, 'staff', currentCount);
@@ -86,12 +79,10 @@ export async function createStaff(ctx: TenantContext, input: { name: string; ema
 
   const id = generateId();
   const branchId = input.branchId && input.branchId !== 'all' ? input.branchId : ctx.branchId || null;
-
   await sql`
     INSERT INTO staff (id, organization_id, name, email, phone, pin_code, pin_argon2, id_type, id_number, role, assigned_branch_id, status, avatar, password_hash, password_argon2, created_at, updated_at)
     VALUES (${id}, ${ctx.organizationId}, ${input.name.trim()}, ${input.email.trim().toLowerCase()}, ${input.phone?.trim() || null}, NULL, ${hashedPin}, ${input.idType || null}, ${input.idNumber?.trim() || null}, ${input.role}, ${branchId}, 'active', ${input.avatar || ''}, NULL, ${passwordHash}, NOW(), NOW())
   `;
-
   await logAudit(ctx.userId, 'staff.create', { staffId: id, name: input.name, role: input.role }, ctx.organizationId, ctx.branchId);
   const rows = await sql`SELECT id, organization_id, name, email, phone, id_type, id_number, role, assigned_branch_id, status, avatar, created_at, updated_at FROM staff WHERE id = ${id} AND organization_id = ${ctx.organizationId}`;
   return rows[0] as Staff;
@@ -102,14 +93,10 @@ export async function updateStaff(ctx: TenantContext, staffId: string, updates: 
   await setTenantContext(sql, ctx.organizationId);
   const existing = await sql`SELECT id, organization_id, name, email, phone, id_type, id_number, role, assigned_branch_id, status, avatar, created_at, updated_at FROM staff WHERE id = ${staffId} AND organization_id = ${ctx.organizationId}`;
   if (existing.length === 0) throw new Error('Staff not found');
-
   const fields: string[] = [];
   const values: any[] = [];
   for (const [key, value] of Object.entries(updates)) {
-    if (value !== undefined) {
-      fields.push(key);
-      values.push(key === 'assigned_branch_id' && value === 'all' ? null : value);
-    }
+    if (value !== undefined) { fields.push(key); values.push(key === 'assigned_branch_id' && value === 'all' ? null : value); }
   }
   if (!fields.length) return existing[0] as Staff;
   const setClauses = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
