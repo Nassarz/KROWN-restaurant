@@ -1,0 +1,186 @@
+name: KROWN One-Time Auth Fix
+on:
+  push:
+    branches: [security-auth-fix-20260906]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch authentication client
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          page = Path('app/page.tsx')
+          text = page.read_text()
+          start = text.index('  const handlePinLogin = async (e: React.FormEvent) => {')
+          end = text.index('  const handleStaffLogin = async (e: React.FormEvent) => {', start)
+          new_handler = r'''  const handlePinLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || email.trim() === '') {
+      setLoginError('Please enter your staff email address for PIN login.');
+      return;
+    }
+    if (!pin || pin.length < 4) {
+      setLoginError('Please enter your 4-digit PIN code.');
+      return;
+    }
+    setIsSubmitting(true);
+    setLoginError(null);
+
+    const cleanEmail = email.trim().toLowerCase();
+    let foundStaff: StaffMember | undefined;
+
+    try {
+      // PIN authentication is always online unless the network request itself fails.
+      // A server 4xx/5xx must never be misreported as an offline condition.
+      const deviceId = localStorage.getItem('krown_device_id') || '';
+      if (!deviceId) {
+        setLoginError('This terminal is not enrolled. A registered KROWN device is required for secure PIN login.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      const proof = await createDeviceProof(deviceId);
+      const res = await fetch('/api/auth/pin-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanEmail, pin, deviceId, challenge: proof.challenge, signature: proof.signature }),
+      });
+      const json = await res.json().catch(() => ({}));
+
+      if (!res.ok || !json?.data?.staff) {
+        const msg = json?.error || `Authentication failed (${res.status})`;
+        setLoginError(msg.includes('locked') ? `🔒 ${msg}` : msg);
+        setIsSubmitting(false);
+        return;
+      }
+
+      const s = json.data.staff;
+      if (json.data.token) localStorage.setItem('krown_session_token', json.data.token);
+      if (json.data.deviceId) localStorage.setItem('krown_device_id', json.data.deviceId);
+      foundStaff = {
+        id: s.id,
+        name: s.name || cleanEmail.split('@')[0],
+        email: s.email || cleanEmail,
+        role: normalizeRole(s.role),
+        branch: s.branch || 'Global HQ',
+        assignedBranchId: s.assigned_branch_id || null,
+        status: s.status || 'active',
+        avatar: s.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(s.name || 'Staff')}&background=f97316&color=fff&bold=true&size=200`,
+      };
+    } catch (err: any) {
+      // Offline PIN authentication is deliberately not performed with the legacy
+      // password cache. Device-bound PINs require a live server challenge.
+      setLoginError('Unable to reach KROWN securely. Check your internet connection and try again.');
+      setIsSubmitting(false);
+      return;
+    }
+
+    if (foundStaff) {
+      if (foundStaff.status === 'banned') {
+        setLoginError('Access Denied: This account is BANNED.');
+        setIsSubmitting(false);
+        return;
+      }
+      if (foundStaff.status === 'paused') {
+        setLoginError('Account On Hold: Your account is currently paused.');
+        setIsSubmitting(false);
+        return;
+      }
+      didLoginRef.current = true;
+      setUser({ uid: foundStaff.id, displayName: foundStaff.name, email: foundStaff.email, photoURL: foundStaff.avatar, assignedBranchId: foundStaff.assignedBranchId });
+      setActiveStaff(foundStaff);
+      localStorage.setItem('krown_staff_profile', JSON.stringify(foundStaff));
+      if (typeof window !== 'undefined') sessionStorage.setItem('krown_active_session', 'true');
+
+      if (foundStaff.role === 'Super Admin') setView('super_admin');
+      else if (foundStaff.role === 'Restaurant Admin') setView('admin');
+      else if (foundStaff.role === 'Branch Manager') setView('manager');
+      else if (foundStaff.role === 'Cashier') setView('cashier');
+      else if (foundStaff.role === 'Head Chef' || foundStaff.role === 'Kitchen Staff') setView('kitchen');
+      else setView('pos');
+
+      setEmail('');
+      setPassword('');
+      setPin('');
+      setIsSubmitting(false);
+      requestAnimationFrame(() => { dataStore.refresh().catch(() => {}); });
+    } else {
+      setIsSubmitting(false);
+    }
+  };
+
+'''
+          text = text[:start] + new_handler + text[end:]
+          text = text.replace("  getCachedOfflineProfile,\n  isOffline\n", "  getCachedOfflineProfile\n")
+          text = text.replace("import { UtensilsCrossed, Lock, Mail, ShieldAlert } from 'lucide-react';", "import { UtensilsCrossed, Lock, Mail, ShieldAlert } from 'lucide-react';\nimport { createDeviceProof } from '@/lib/device-auth-client';")
+          page.write_text(text)
+
+          client = Path('lib/device-auth-client.ts')
+          client.write_text(r'''const DB_NAME = 'krown-device-auth';
+const STORE_NAME = 'keys';
+const KEY_NAME = 'device-signing-key';
+
+function b64url(bytes: ArrayBuffer | Uint8Array): string {
+  const a = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let s = '';
+  for (const b of a) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function openDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(STORE_NAME);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error('Unable to open device key store'));
+  });
+}
+
+async function getPrivateKey(): Promise<CryptoKey | null> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const req = tx.objectStore(STORE_NAME).get(KEY_NAME);
+    req.onsuccess = () => resolve((req.result as CryptoKey) || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function createDeviceProof(deviceId: string): Promise<{ challenge: string; signature: string }> {
+  if (!deviceId) throw new Error('Device is not enrolled');
+  const key = await getPrivateKey();
+  if (!key) throw new Error('Device signing key is not available on this terminal');
+
+  const response = await fetch('/api/devices/challenge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId }),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || !json?.data?.challenge) throw new Error(json?.error || 'Unable to obtain device challenge');
+
+  const challenge = String(json.data.challenge);
+  const signature = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    key,
+    new TextEncoder().encode(challenge),
+  );
+  return { challenge, signature: b64url(signature) };
+}
+''')
+          PY
+      - name: Remove one-time workflow and commit
+        run: |
+          rm -f .github/workflows/one-time-auth-fix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/page.tsx lib/device-auth-client.ts .github/workflows/one-time-auth-fix.yml
+          git commit -m 'fix: enforce secure device-bound PIN login' || exit 0
+          git push
