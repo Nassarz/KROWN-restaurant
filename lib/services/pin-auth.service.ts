@@ -75,11 +75,11 @@ export async function authenticateByPinOnly(
       LIMIT 1
     `;
     if (!devices.length || String((devices[0] as any).status) !== 'active') {
-      return { success: false, error: 'This device is not active. Activate it from the KROWN Super Admin dashboard.' };
+      return { success: false, error: 'This device is not active. Activate it before signing in.' };
     }
 
     const allowedRoles = Array.isArray((devices[0] as any).allowed_roles)
-      ? (devices[0] as any).allowed_roles.map((r: unknown) => String(r))
+      ? (devices[0] as any).allowed_roles.map((r: unknown) => String(r).trim().toLowerCase())
       : [];
 
     candidates = await sql`
@@ -89,19 +89,23 @@ export async function authenticateByPinOnly(
         AND assigned_branch_id=${deviceContext.branchId}
         AND status='active'
         AND pin_argon2 IS NOT NULL
-        AND role NOT IN ('super_admin','restaurant_admin','admin')
-        AND (${allowedRoles.length === 0} OR role = ANY(${allowedRoles}::text[]))
       ORDER BY id
     `;
+
+    if (allowedRoles.length) {
+      candidates = candidates.filter((staff: any) => allowedRoles.includes(String(staff.role || '').trim().toLowerCase()));
+    }
+
+    candidates = candidates.filter((staff: any) => !ADMIN_ROLES.has(String(staff.role || '').trim().toLowerCase()));
   } else {
     candidates = await sql`
       SELECT id,name,email,role,branch,assigned_branch_id,organization_id,pin_argon2,status
       FROM staff
       WHERE status='active'
         AND pin_argon2 IS NOT NULL
-        AND role IN ('super_admin','restaurant_admin','admin')
       ORDER BY id
     `;
+    candidates = candidates.filter((staff: any) => ADMIN_ROLES.has(String(staff.role || '').trim().toLowerCase()));
   }
 
   const matches: any[] = [];
@@ -114,7 +118,7 @@ export async function authenticateByPinOnly(
   if (matches.length > 1) {
     return {
       success: false,
-      error: 'This PIN is assigned to more than one account. Ask an administrator to assign a unique PIN.',
+      error: 'This PIN is assigned to more than one account. Ask the KROWN team to resolve it.',
     };
   }
 
