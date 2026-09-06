@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { listOrders, createOrder } from '@/lib/services/order.service';
+import { listOrders } from '@/lib/services/order.service';
+import { createIdempotentOrder } from '@/lib/services/idempotent-order.service';
 import { extractVerifiedTenantContext } from '@/lib/tenant';
 import { hasPermission } from '@/lib/rbac';
 import { assertBranchAccess } from '@/lib/access-control';
@@ -32,24 +33,15 @@ export async function POST(request: NextRequest) {
     const branchId = body.branchId || body.branch_id || ctx.branchId;
     if (!branchId) return NextResponse.json({ error: 'Branch is required' }, { status: 400 });
     await assertBranchAccess(ctx, branchId);
-    const items = (body.items || []).map((item: any) => ({ productId: item.productId || item.product_id, quantity: Number(item.quantity || 1), notes: item.notes, addOns: item.addOns || item.add_ons }));
-    if (!items.length) return NextResponse.json({ error: 'At least one order item is required' }, { status: 400 });
-    if (items.some((item: any) => !item.productId || !Number.isFinite(item.quantity) || item.quantity <= 0)) return NextResponse.json({ error: 'Invalid order item' }, { status: 400 });
-
-    const order = await createOrder(ctx, {
-      branchId,
-      tableNumber: String(body.table || body.table_number || '1'),
-      seat: body.seat,
-      items,
-      staffId: ctx.userId,
-      companyName: body.companyName || body.company_name,
-      tin: body.tin,
-      companyId: body.companyId || body.company_id,
-    });
-    return NextResponse.json({ data: order }, { status: 201 });
-  } catch (error: any) {
-    const message = error?.message || 'Failed to create order';
-    const status = /Forbidden/i.test(message) ? 403 : /invalid order|branch|required/i.test(message) ? 400 : 500;
-    return NextResponse.json({ error: message }, { status });
+    const items = (body.items || []).map((item: any) => ({ productId:item.productId || item.product_id, quantity:Number(item.quantity || 1), notes:item.notes, addOns:item.addOns || item.add_ons }));
+    if (!items.length) return NextResponse.json({ error:'At least one order item is required' }, { status:400 });
+    if (items.some((item:any)=>!item.productId || !Number.isFinite(item.quantity) || item.quantity<=0)) return NextResponse.json({ error:'Invalid order item' }, { status:400 });
+    const idempotencyKey = String(body.idempotencyKey || body.idempotency_key || request.headers.get('Idempotency-Key') || '').trim();
+    if (!/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey)) return NextResponse.json({ error:'A valid idempotency key is required' }, { status:400 });
+    const result = await createIdempotentOrder(ctx, { branchId, tableNumber:String(body.table || body.table_number || '1'), seat:body.seat, items, staffId:ctx.userId, companyName:body.companyName || body.company_name, tin:body.tin, companyId:body.companyId || body.company_id, idempotencyKey });
+    return NextResponse.json({ data:result.order, replayed:result.replayed }, { status:result.replayed ? 200 : 201 });
+  } catch (error:any) {
+    const message=error?.message || 'Failed to create order';
+    return NextResponse.json({ error:message }, { status:/Forbidden/i.test(message)?403:/invalid|required|credit|quantity/i.test(message)?400:500 });
   }
 }
