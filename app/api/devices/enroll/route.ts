@@ -18,15 +18,24 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const token = clean(body.token, 512);
-    const deviceFingerprint = clean(body.deviceFingerprint, 512);
     const credentialId = clean(body.credentialId, 128);
     const credentialPublicKey = clean(body.credentialPublicKey, 8192);
     const browser = clean(body.browser, 120) || null;
     const operatingSystem = clean(body.operatingSystem, 120) || null;
     const userAgent = request.headers.get('user-agent')?.slice(0, 1000) || null;
     const ipAddress = requestIp(request);
-    if (!token || !deviceFingerprint || !credentialId || !credentialPublicKey) return NextResponse.json({ data: null, error: 'token, deviceFingerprint, credentialId and credentialPublicKey are required' }, { status: 400 });
-    if (!validP256Jwk(credentialPublicKey)) return NextResponse.json({ data: null, error: 'credentialPublicKey must be a valid P-256 public JWK' }, { status: 400 });
+
+    if (!token || !credentialId || !credentialPublicKey) {
+      return NextResponse.json({ data: null, error: 'token, credentialId and credentialPublicKey are required' }, { status: 400 });
+    }
+    if (!validP256Jwk(credentialPublicKey)) {
+      return NextResponse.json({ data: null, error: 'credentialPublicKey must be a valid P-256 public JWK' }, { status: 400 });
+    }
+
+    // The cryptographic credential is the authoritative device identity.
+    // A browser fingerprint is optional metadata only and is never required for enrollment.
+    const suppliedFingerprint = clean(body.deviceFingerprint, 512);
+    const deviceFingerprint = suppliedFingerprint || createHash('sha256').update(`krown-device:${credentialId}`).digest('hex');
 
     const sql = getSql();
     const tokenHash = createHash('sha256').update(token).digest('hex');
