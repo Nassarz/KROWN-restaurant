@@ -5,7 +5,21 @@ import { getSql } from '@/lib/neon-server';
 import { assertBranchAccess } from '@/lib/access-control';
 import { hasPermission } from '@/lib/rbac';
 
-const ALLOWED_DEVICE_TYPES = new Set(['pos', 'kitchen', 'waiter_tablet', 'manager_desk', 'admin_desk', 'tablet', 'mobile', 'general']);
+const ALLOWED_DEVICE_TYPES = new Set(['pos', 'kitchen', 'waiter_tablet', 'manager_desk', 'admin_desk', 'general']);
+
+// Keep older UI/device clients compatible while storing only values accepted by
+// the devices table constraint.
+function normalizeDeviceType(value: string): string {
+  const aliases: Record<string, string> = {
+    pos_terminal: 'pos',
+    kitchen_display: 'kitchen',
+    tablet: 'waiter_tablet',
+    mobile: 'general',
+    desktop: 'manager_desk',
+  };
+  return aliases[value] || value;
+}
+
 const ALLOWED_ROLES = new Set([
   'cashier', 'waiter', 'senior_waiter', 'head_chef', 'chef', 'kitchen_staff',
   'branch_manager', 'manager', 'restaurant_admin', 'admin', 'super_admin',
@@ -22,8 +36,8 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const requestedOrganizationId = String(body.organizationId || '').trim();
     let branchId = String(body.branchId || ctx.branchId || '').trim();
-    const deviceTypeRaw = String(body.deviceType || '').trim();
-    const deviceType = deviceTypeRaw === 'kitchen_display' ? 'kitchen' : deviceTypeRaw;
+    const deviceTypeRaw = String(body.deviceType || '').trim().toLowerCase();
+    const deviceType = normalizeDeviceType(deviceTypeRaw);
     const deviceName = String(body.deviceName || '').trim();
     const allowedRoles = Array.isArray(body.allowedRoles)
       ? body.allowedRoles.map((r: unknown) => String(r).trim().toLowerCase()).filter((r: string) => ALLOWED_ROLES.has(r)).slice(0, 20)
